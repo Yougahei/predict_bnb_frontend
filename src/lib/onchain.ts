@@ -1,0 +1,282 @@
+// Ported from Python onchain.py
+// EVM / BSC on-chain access utilities for the prediction market.
+
+import { BrowserProvider, JsonRpcProvider, Contract } from "ethers";
+
+export type Dict<T = any> = Record<string, T>;
+
+export const DEFAULT_BSC_RPCS: string[] = [
+  "https://bsc-dataseed.binance.org/",
+  "https://bsc-dataseed1.binance.org/",
+  "https://bsc-dataseed2.binance.org/",
+];
+
+export const PREDICTION_ADDRESS_DEFAULT =
+  "0x18b2a687610328590bc8f2e5fedde3b582a49cda";
+export const CHAINLINK_FEED_ADDRESS_DEFAULT =
+  "0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE";
+export const CHAINLINK_DECIMALS_DEFAULT = 8;
+export const BSC_RPC_TIMEOUT_DEFAULT = 4.0;
+
+// NOTE: we keep ABI structure identical to Python version.
+export const PREDICTION_ABI = [
+  {
+    inputs: [],
+    name: "currentEpoch",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    name: "rounds",
+    outputs: [
+      { internalType: "uint256", name: "epoch", type: "uint256" },
+      { internalType: "uint256", name: "startTimestamp", type: "uint256" },
+      { internalType: "uint256", name: "lockTimestamp", type: "uint256" },
+      { internalType: "uint256", name: "closeTimestamp", type: "uint256" },
+      { internalType: "int256", name: "lockPrice", type: "int256" },
+      { internalType: "int256", name: "closePrice", type: "int256" },
+      { internalType: "uint256", name: "lockOracleId", type: "uint256" },
+      { internalType: "uint256", name: "closeOracleId", type: "uint256" },
+      { internalType: "uint256", name: "totalAmount", type: "uint256" },
+      { internalType: "uint256", name: "bullAmount", type: "uint256" },
+      { internalType: "uint256", name: "bearAmount", type: "uint256" },
+      { internalType: "uint256", name: "rewardBaseCalAmount", type: "uint256" },
+      { internalType: "uint256", name: "rewardAmount", type: "uint256" },
+      { internalType: "bool", name: "oracleCalled", type: "bool" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+export const AGGREGATOR_ABI = [
+  {
+    inputs: [],
+    name: "decimals",
+    outputs: [{ internalType: "uint8", name: "", type: "uint8" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "latestRoundData",
+    outputs: [
+      { internalType: "uint80", name: "roundId", type: "uint80" },
+      { internalType: "int256", name: "answer", type: "int256" },
+      { internalType: "uint256", name: "startedAt", type: "uint256" },
+      { internalType: "uint256", name: "updatedAt", type: "uint256" },
+      { internalType: "uint80", name: "answeredInRound", type: "uint80" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+let _provider: JsonRpcProvider | null = null;
+let _providerUrl: string | null = null;
+let _decimals: number | null = null;
+let _decimalsTs = 0;
+
+function rpcCandidates(): string[] {
+  const env = process.env.NEXT_PUBLIC_BSC_RPC_URL;
+  if (env) {
+    return env
+      .split(",")
+      .map((u) => u.trim())
+      .filter(Boolean);
+  }
+  return [...DEFAULT_BSC_RPCS];
+}
+
+function rpcTimeout(): number {
+  const value = process.env.NEXT_PUBLIC_BSC_RPC_TIMEOUT;
+  if (!value) return BSC_RPC_TIMEOUT_DEFAULT;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : BSC_RPC_TIMEOUT_DEFAULT;
+}
+
+async function connectWeb3(): Promise<[JsonRpcProvider | null, string | null]> {
+  const timeoutSec = rpcTimeout();
+  const candidates = rpcCandidates();
+
+  for (const url of candidates) {
+    try {
+      const provider = new JsonRpcProvider(url, undefined, {
+        staticNetwork: undefined,
+        batchMaxCount: 1,
+      });
+      // emulate timeout by racing against a timer
+      const ok = await Promise.race([
+        provider.getBlockNumber().then(
+          () => true,
+          () => false,
+        ),
+        new Promise<boolean>((resolve) =>
+          setTimeout(() => resolve(false), timeoutSec * 1000),
+        ),
+      ]);
+      if (ok) {
+        return [provider, url];
+      }
+    } catch {
+      continue;
+    }
+  }
+  return [null, null];
+}
+
+export async function getWeb3(): Promise<[JsonRpcProvider | null, string | null]> {
+  if (_provider) return [_provider, _providerUrl];
+  const [prov, url] = await connectWeb3();
+  _provider = prov;
+  _providerUrl = url;
+  return [prov, url];
+}
+
+async function getContract(address: string, abi: any): Promise<Contract> {
+  const [prov] = await getWeb3();
+  if (!prov) {
+    throw new Error("BSC RPC unavailable");
+  }
+  if (!address) {
+    throw new Error("Invalid contract address");
+  }
+  return new Contract(address, abi, prov);
+}
+
+export async function getPredictionContract(): Promise<Contract> {
+  const address =
+    process.env.NEXT_PUBLIC_PREDICTION_ADDRESS || PREDICTION_ADDRESS_DEFAULT;
+  return getContract(address, PREDICTION_ABI);
+}
+
+export async function getChainlinkContract(): Promise<Contract> {
+  const address =
+    process.env.NEXT_PUBLIC_CHAINLINK_FEED_ADDRESS || CHAINLINK_FEED_ADDRESS_DEFAULT;
+  return getContract(address, AGGREGATOR_ABI);
+}
+
+async function getDecimals(): Promise<number> {
+  const now = Date.now() / 1000;
+  if (_decimals != null && now - _decimalsTs < 3600) {
+    return _decimals;
+  }
+  try {
+    const contract = await getChainlinkContract();
+    const decimals: bigint = await contract.decimals();
+    _decimals = Number(decimals);
+    _decimalsTs = now;
+    return _decimals;
+  } catch {
+    if (_decimals == null) {
+      const raw = process.env.NEXT_PUBLIC_CHAINLINK_DECIMALS_DEFAULT;
+      if (raw != null) {
+        const n = Number(raw);
+        _decimals = Number.isFinite(n) ? n : CHAINLINK_DECIMALS_DEFAULT;
+      } else {
+        _decimals = CHAINLINK_DECIMALS_DEFAULT;
+      }
+    }
+    return _decimals;
+  }
+}
+
+function toPrice(value: bigint | null | undefined, decimals: number): number | null {
+  if (value == null) return null;
+  return Number(value) / 10 ** decimals;
+}
+
+function toAmount(
+  value: bigint | null | undefined,
+  decimals: number = 18,
+): number | null {
+  if (value == null) return null;
+  return Number(value) / 10 ** decimals;
+}
+
+export async function fetchChainlinkPrice(): Promise<Dict> {
+  const contract = await getChainlinkContract();
+  const [roundId, answer, startedAt, updatedAt] = await contract.latestRoundData();
+  const decimals = await getDecimals();
+  const price = toPrice(answer, decimals);
+  return {
+    price,
+    round_id: Number(roundId),
+    started_at: Number(startedAt),
+    updated_at: Number(updatedAt),
+    decimals,
+    source: "chainlink",
+  };
+}
+
+export async function fetchCurrentEpoch(): Promise<number> {
+  const contract = await getPredictionContract();
+  const epoch: bigint = await contract.currentEpoch();
+  return Number(epoch);
+}
+
+export interface RoundData {
+  epoch: number;
+  start_ts: number;
+  lock_ts: number;
+  close_ts: number;
+  lock_price: number | null;
+  close_price: number | null;
+  lock_oracle_id: number;
+  close_oracle_id: number;
+  total_amount: number | null;
+  bull_amount: number | null;
+  bear_amount: number | null;
+  reward_base: number | null;
+  reward_amount: number | null;
+  oracle_called: boolean;
+}
+
+export async function fetchRound(epoch: number): Promise<RoundData> {
+  const contract = await getPredictionContract();
+  const decimals = await getDecimals();
+  const data = await contract.rounds(BigInt(epoch));
+  return {
+    epoch: Number(data[0]),
+    start_ts: Number(data[1]) * 1000,
+    lock_ts: Number(data[2]) * 1000,
+    close_ts: Number(data[3]) * 1000,
+    lock_price: data[4] ? toPrice(data[4], decimals) : null,
+    close_price: data[5] ? toPrice(data[5], decimals) : null,
+    lock_oracle_id: Number(data[6]),
+    close_oracle_id: Number(data[7]),
+    total_amount: data[8] != null ? toAmount(data[8]) : null,
+    bull_amount: data[9] != null ? toAmount(data[9]) : null,
+    bear_amount: data[10] != null ? toAmount(data[10]) : null,
+    reward_base: data[11] != null ? toAmount(data[11]) : null,
+    reward_amount: data[12] != null ? toAmount(data[12]) : null,
+    oracle_called: Boolean(data[13]),
+  };
+}
+
+export async function fetchCurrentRound(): Promise<RoundData & { current_epoch: number }> {
+  const epoch = await fetchCurrentEpoch();
+  const current = await fetchRound(epoch);
+  return {
+    ...current,
+    current_epoch: epoch,
+  };
+}
+
+export async function fetchRecentRounds(limit: number = 12): Promise<RoundData[]> {
+  let epoch = await fetchCurrentEpoch();
+  const rounds: RoundData[] = [];
+  let checked = 0;
+  while (epoch > 0 && rounds.length < limit && checked < limit * 3) {
+    const data = await fetchRound(epoch);
+    checked += 1;
+    if (data.close_ts && data.oracle_called) {
+      rounds.push(data);
+    }
+    epoch -= 1;
+  }
+  return rounds;
+}
+
