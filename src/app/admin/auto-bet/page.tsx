@@ -24,9 +24,21 @@ export default function AutoBetPage() {
   
   // Claiming state
   const [claimableEpochs, setClaimableEpochs] = useState<number[]>([]);
+  const [claimableDetails, setClaimableDetails] = useState<{epoch: number, close_ts: number}[]>([]);
   const [claiming, setClaiming] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
   const [bnbPrice, setBnbPrice] = useState<number | null>(null);
+  const [claimCountdown, setClaimCountdown] = useState<number | null>(null);
+  
+  // Custom alert state
+  const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   async function loadConfig() {
     const res = await fetch("/api/app-config");
@@ -110,6 +122,7 @@ export default function AutoBetPage() {
       if (claimRes.ok) {
         const claimJson = await claimRes.json();
         setClaimableEpochs(claimJson.claimable_epochs || []);
+        setClaimableDetails(claimJson.claimable_details || []);
       }
     } finally {
       setLoading(false);
@@ -127,13 +140,13 @@ export default function AutoBetPage() {
       });
       const json = await res.json();
       if (json.success) {
-        alert(`领取成功！交易哈希: ${json.hash}`);
+        setToast({ message: `领取成功！交易哈希: ${json.hash}`, type: 'success' });
         loadLogs();
       } else {
         throw new Error(json.error || "领取失败");
       }
     } catch (e: any) {
-      alert(e.message);
+      setToast({ message: e.message, type: 'error' });
     } finally {
       setClaiming(false);
     }
@@ -150,8 +163,49 @@ export default function AutoBetPage() {
     return () => clearInterval(id);
   }, [autoRefresh]);
 
+  useEffect(() => {
+    if (claimableDetails.length === 0) {
+      setClaimCountdown(null);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      // 找最旧的那个未领取回合，因为它最先触发自动领取
+      // 如果最旧的已经超时了，那就应该立即领取
+      const oldest = [...claimableDetails].sort((a, b) => a.close_ts - b.close_ts)[0];
+      if (!oldest) return;
+
+      const now = Math.floor(Date.now() / 1000);
+      const deadline = oldest.close_ts + 60; // 60s timeout
+      const left = deadline - now;
+      
+      setClaimCountdown(left > 0 ? left : 0);
+
+      // 如果倒计时结束且没在领取中，自动触发领取
+      if (left <= 0 && !claiming && claimableEpochs.length > 0) {
+        handleClaim();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [claimableDetails, claiming, claimableEpochs]);
+
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-4 py-8">
+    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-4 py-8 relative">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-6 py-3 rounded-lg shadow-2xl transition-all transform duration-300 ${
+          toast.type === 'success' 
+            ? 'bg-emerald-500/90 text-white border border-emerald-400' 
+            : 'bg-rose-500/90 text-white border border-rose-400'
+        }`}>
+          <div className="flex items-center gap-2">
+            <span>{toast.type === 'success' ? '✅' : '❌'}</span>
+            <span className="font-medium text-sm">{toast.message}</span>
+          </div>
+        </div>
+      )}
+
       <header className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">自动下注</h1>
@@ -169,14 +223,18 @@ export default function AutoBetPage() {
           {claimableEpochs.length > 0 && (
             <button
               onClick={handleClaim}
-              disabled={claiming}
+              disabled={claiming || (claimCountdown === 0)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all shadow-lg ${
-                claiming 
+                claiming || claimCountdown === 0
                   ? "bg-slate-700 text-slate-400 cursor-not-allowed" 
                   : "bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:from-amber-400 hover:to-orange-400 animate-pulse"
               }`}
             >
-              {claiming ? "领取中..." : `领取奖金 (${claimableEpochs.length} 个回合)`}
+              {claiming 
+                ? "领取中..." 
+                : claimCountdown === 0
+                  ? "自动领取中..."
+                  : `领取奖金 (${claimCountdown ? claimCountdown + 's' : claimableEpochs.length + '个'})`}
             </button>
           )}
           <label className="flex items-center gap-2 text-xs text-slate-400">

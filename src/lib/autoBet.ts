@@ -1,10 +1,65 @@
 import { getConfig } from "./configStore";
-import { placeBet, fetchBalance, fetchCurrentRound, getAddressFromPrivateKey } from "./onchain";
-import { logBet, updateBetStatus, listBetLogs, acquireBetLock } from "./betStore";
+import { placeBet, fetchBalance, fetchCurrentRound, getAddressFromPrivateKey, claimRewards, checkClaimable } from "./onchain";
+import { logBet, updateBetStatus, listBetLogs, acquireBetLock, getAutoClaimableEpochs, markAsClaimed } from "./betStore";
 import { AnyDict } from "./prediction";
 
 const PENDING_TIMEOUTS = new Map<number, NodeJS.Timeout>();
 const PROCESSING_EPOCHS = new Set<number>();
+let isClaiming = false;
+
+export async function runAutoClaimLogic(): Promise<void> {
+  if (isClaiming) return;
+  const enabled = getConfig("AUTO_BET_ENABLED") === "1";
+  if (!enabled) return;
+
+  try {
+    isClaiming = true;
+    // 查找超过1分钟（60秒）未领取的获胜回合
+    // 这里传入 60 秒，表示查询 close_ts < now - 60 的记录
+    const epochs = getAutoClaimableEpochs(60);
+    if (epochs.length === 0) return;
+
+    console.log(`[AutoClaim] Found ${epochs.length} claimable epochs: ${epochs.join(", ")}`);
+
+    const privateKey = getConfig("WALLET_PRIVATE_KEY") || "";
+    const walletAddress = getConfig("WALLET_ADDRESS") || getAddressFromPrivateKey(privateKey) || "";
+    if (!privateKey || !walletAddress) {
+      console.error("[AutoClaim] No private key found, skipping claim.");
+      return;
+    }
+
+    // Double-check on-chain eligibility to avoid reverts
+    const checks = await Promise.all(
+      epochs.map(async (e) => {
+        try {
+          const ok = await checkClaimable(e, walletAddress);
+          return ok ? e : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+    const toClaim = checks.filter((e): e is number => e !== null);
+    if (toClaim.length === 0) {
+      console.log("[AutoClaim] No epochs eligible on-chain after check.");
+      return;
+    }
+
+    // 执行链上领取
+    const result = await claimRewards(privateKey, toClaim);
+    if (result && result.hash) {
+      console.log(`[AutoClaim] Claimed successfully! Tx: ${result.hash}`);
+      // 更新数据库状态
+      markAsClaimed(toClaim);
+    } else {
+      console.error("[AutoClaim] Failed to send claim transaction.");
+    }
+  } catch (err) {
+    console.error("[AutoClaim] Error during auto claim:", err);
+  } finally {
+    isClaiming = false;
+  }
+}
 
 export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null): Promise<void> {
   // 0. 全局互斥锁：确保同一时间针对同一 epoch 只有一个执行流在运行

@@ -92,14 +92,24 @@ npm run dev
 **Q: 跨平台切换时报错 "Could not locate the bindings file" (better-sqlite3)?**
 A: 这是因为 `better-sqlite3` 是原生模块，在 macOS 上编译的版本无法在 Windows 上运行（反之亦然）。
 **解决方案**：
-在切换系统后，请执行以下命令重新编译依赖：
+在切换系统后，请务必执行以下命令进行“一键重置”：
+
 ```bash
-# 删除依赖
-rm -rf node_modules
+# 执行 npm run clean 会自动清理 node_modules 和缓存文件
+# 该命令现已兼容 Windows 和 macOS
+npm run clean
 
 # 重新安装 (会自动编译适合当前系统的版本)
 npm install
 ```
+
+**Q: Windows 下仍然报错 `node-v137-win32-x64` 找不到?**
+A: 这说明您正在使用较新的 Node.js 版本（如 v24+），而 `better-sqlite3` 尚未发布对应的预编译包。
+**解决方案**：
+1. 建议降级到 **Node.js v20 (LTS)** 或 **v22 (LTS)**。
+2. 或者安装 Windows 构建工具以支持本地编译：
+   - 以管理员身份运行 PowerShell: `npm install --global --production windows-build-tools`
+   - 然后再次运行 `npm run clean && npm install`。
 
 **Q: 报错 "Chainlink fetch error" 或 "ECONNRESET"?**
 A: 这是网络连接问题，通常是因为默认的 RPC 节点连接不稳定。

@@ -73,6 +73,27 @@ export function markAsClaimed(epochs: number[]): void {
   conn.prepare(`UPDATE bet_logs SET claimed = 1 WHERE epoch IN (${placeholders})`).run(...epochs);
 }
 
+export function getAutoClaimableEpochs(delaySeconds: number = 300): number[] {
+  const conn = getDb();
+  // 当前时间 - 延迟时间 > 结束时间
+  const threshold = Math.floor(Date.now() / 1000) - delaySeconds;
+  
+  const sql = `
+    SELECT b.epoch
+    FROM bet_logs b
+    JOIN round_history r ON b.epoch = r.epoch
+    WHERE b.status = 'SUCCESS' 
+      AND b.claimed = 0
+      AND r.oracle_called = 1
+      AND r.close_ts < ?
+    ORDER BY b.epoch ASC
+    LIMIT 20
+  `;
+  
+  const rows = conn.prepare(sql).all(threshold) as { epoch: number }[];
+  return rows.map(r => r.epoch);
+}
+
 export function getBetStats(walletAddress?: string) {
   const conn = getDb();
   let sql = `

@@ -21,7 +21,7 @@ import {
 } from "./modelStore";
 import { upsertRounds, getRecentRounds } from "./historyStore";
 import { scheduleLLMPredictions } from "./llmClient";
-import { runAutoBetLogic } from "./autoBet";
+import { runAutoBetLogic, runAutoClaimLogic } from "./autoBet";
 
 const SYMBOL = "BNBUSD";
 
@@ -272,6 +272,11 @@ export async function buildSnapshot(options: BuildSnapshotOptions = {}): Promise
         console.error("Auto bet error", err);
       }
     })();
+  }
+  
+  // 顺便检查是否有需要自动领奖的
+  if (options.autoBet) {
+    runAutoClaimLogic().catch(e => console.error("Auto claim error", e));
   }
 
   return {
