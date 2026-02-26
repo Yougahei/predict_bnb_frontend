@@ -1,36 +1,106 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BNB 预测市场自动下注系统 (BNB Prediction Auto-Betting)
 
-## Getting Started
+这是一个基于 Next.js 构建的智能自动下注系统，专为 PancakeSwap BNB 预测市场设计。它利用大语言模型 (LLM) 进行市场分析，并根据分析结果自动执行链上下注操作。
 
-First, run the development server:
+## 核心功能
+
+- **🤖 LLM 驱动决策**：集成多种大语言模型（如 DeepSeek, GPT-4 等），实时分析 BNB 价格走势并给出涨跌建议。
+- **⚡️ 智能自动下注**：
+  - **高并发安全**：内置数据库级互斥锁 (`bet_locks`)，确保同一回合 (Epoch) 仅触发一次下注，彻底杜绝重复交易。
+  - **抗网络波动**：优化的 Nonce 管理，防止交易卡顿或失败。
+  - **资金管理**：可配置下注比例（如余额的 10%, 25% 等），并实时显示 BNB 余额及美元估值。
+- **📊 实时数据看板**：
+  - 实时显示当前回合倒计时、BNB 价格。
+  - 详细的下注日志：包括交易哈希、胜负状态、收益统计。
+  - 自动计算累计投入、胜率和预估净收益。
+- **🛡️ 安全隐私**：
+  - 私钥仅存储在本地 SQLite 数据库中，不在前端代码中硬编码。
+  - 界面提供一键清空私钥输入框功能。
+
+## 技术栈
+
+- **框架**: [Next.js 14](https://nextjs.org/) (App Router)
+- **数据库**: SQLite (`better-sqlite3`) - 本地存储配置、日志和锁。
+- **区块链交互**: [ethers.js v6](https://docs.ethers.org/v6/)
+- **UI 组件**: Tailwind CSS, Lucide React
+- **语言**: TypeScript
+
+## 快速开始
+
+### 1. 环境准备
+
+确保您的系统已安装：
+- [Node.js](https://nodejs.org/) (建议 v18 或更高版本)
+- npm 或 yarn
+
+### 2. 安装依赖
+
+```bash
+npm install
+# 或者
+yarn install
+```
+
+### 3. 启动项目
+
+开发模式启动：
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+访问浏览器：[http://localhost:3000](http://localhost:3000)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 配置指南
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+本系统主要通过网页界面进行配置，无需手动修改配置文件。
 
-## Learn More
+### 1. 访问管理后台
+启动项目后，访问 [http://localhost:3000/admin/auto-bet](http://localhost:3000/admin/auto-bet) 进入自动下注管理页面。
 
-To learn more about Next.js, take a look at the following resources:
+### 2. 设置钱包私钥
+在页面右上角的 **"⚙️ 配置"** 面板中：
+1. 点击 **"设置私钥"** 按钮。
+2. 输入您的 BSC (BNB Chain) 钱包私钥。
+3. 点击 **"保存"**。
+   - *注意：私钥将加密存储在本地 `predict_bnb_data/config.db` 数据库中。*
+   - *建议使用专用的测试小额钱包，不要使用存有大量资金的主钱包。*
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 3. 配置 LLM 模型
+系统需要连接大模型 API 来获取预测建议。
+1. 访问模型配置页面（通常在 `/admin/models` 或直接在数据库中配置 `llm_profiles` 表）。
+2. 确保至少有一个启用的模型配置。
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 4. 开启自动下注
+1. 在自动下注页面，设置 **"下注仓位 (%)"**（例如 10%）。
+2. 点击页面中央的大开关，状态变为 **"SYSTEM ACTIVE"** 即表示自动下注已开启。
+3. 系统会自动监听当前回合，在倒计时结束前（通常剩余 20-30 秒时）根据模型建议自动下注。
 
-## Deploy on Vercel
+## 数据库说明
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+数据存储在项目根目录下的 `predict_bnb_data/config.db` 文件中。
+主要数据表：
+- `bet_logs`: 下注记录（包含交易哈希、金额、胜负）。
+- `bet_locks`: 并发锁，防止重复下注。
+- `app_config`: 系统配置（私钥、开关状态等）。
+- `model_predictions`: 模型分析历史。
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+如果需要重置所有数据（清空历史），可以删除该 `.db` 文件或使用 SQLite 工具清空表内容。
+
+## 常见问题 (FAQ)
+
+**Q: 为什么日志里有时候会显示 "Too early to bet"?**
+A: 这是正常的。系统会定期轮询，如果离下注截止时间还早（例如还有 200 秒），系统会跳过下注，等待进入最佳下注窗口（通常是最后 30 秒内）。
+
+**Q: 为什么会显示 "Duplicate bet prevented"?**
+A: 这是系统的安全机制。如果多个进程或网络请求同时尝试对同一回合下注，数据库锁会拦截后续请求，只允许第一笔交易发出，保护您的资金不被重复扣除。
+
+**Q: 私钥安全吗？**
+A: 私钥存储在您本地机器的 SQLite 数据库文件中。只要您的电脑和服务器未被入侵，私钥就是安全的。我们**强烈建议**使用仅存有少量 BNB 的专用钱包进行操作。
+
+## 免责声明
+
+本软件仅供学习和研究使用。
+- **投资有风险，入市需谨慎。**
+- 作者不对因使用本软件产生的任何资金损失负责。
+- 请务必在自己可承受的风险范围内使用，并保管好您的私钥。

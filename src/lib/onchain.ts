@@ -1,7 +1,7 @@
 // Ported from Python onchain.py
 // EVM / BSC on-chain access utilities for the prediction market.
 
-import { BrowserProvider, JsonRpcProvider, Contract } from "ethers";
+import { BrowserProvider, JsonRpcProvider, Contract, Wallet, parseEther } from "ethers";
 
 export type Dict<T = any> = Record<string, T>;
 
@@ -17,6 +17,9 @@ export const CHAINLINK_FEED_ADDRESS_DEFAULT =
   "0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE";
 export const CHAINLINK_DECIMALS_DEFAULT = 8;
 export const BSC_RPC_TIMEOUT_DEFAULT = 4.0;
+
+const BINANCE_BASE = "https://api.binance.com/api/v3";
+const COINGECKO_BASE = "https://api.coingecko.com/api/v3";
 
 // NOTE: we keep ABI structure identical to Python version.
 export const PREDICTION_ABI = [
@@ -46,6 +49,37 @@ export const PREDICTION_ABI = [
       { internalType: "uint256", name: "rewardAmount", type: "uint256" },
       { internalType: "bool", name: "oracleCalled", type: "bool" },
     ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ internalType: "uint256", name: "epoch", type: "uint256" }],
+    name: "betBull",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  {
+    inputs: [{ internalType: "uint256", name: "epoch", type: "uint256" }],
+    name: "betBear",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  {
+    inputs: [{ internalType: "uint256[]", name: "epochs", type: "uint256[]" }],
+    name: "claim",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { internalType: "uint256", name: "epoch", type: "uint256" },
+      { internalType: "address", name: "user", type: "address" },
+    ],
+    name: "claimable",
+    outputs: [{ internalType: "bool", name: "", type: "bool" }],
     stateMutability: "view",
     type: "function",
   },
@@ -146,6 +180,17 @@ async function getContract(address: string, abi: any): Promise<Contract> {
   return new Contract(address, abi, prov);
 }
 
+export function getAddressFromPrivateKey(pk: string): string | null {
+  if (!pk) return null;
+  try {
+    const cleanPk = pk.startsWith("0x") ? pk : "0x" + pk;
+    const wallet = new Wallet(cleanPk);
+    return wallet.address;
+  } catch (e) {
+    return null;
+  }
+}
+
 export async function getPredictionContract(): Promise<Contract> {
   const address =
     process.env.NEXT_PUBLIC_PREDICTION_ADDRESS || PREDICTION_ADDRESS_DEFAULT;
@@ -211,6 +256,56 @@ export async function fetchChainlinkPrice(): Promise<Dict> {
   };
 }
 
+export async function fetchBinancePrice(): Promise<number> {
+  const resp = await fetch(`${BINANCE_BASE}/ticker/price?symbol=BNBUSDT`);
+  if (!resp.ok) throw new Error(`Binance error: ${resp.statusText}`);
+  const data = await resp.json();
+  return parseFloat(data.price);
+}
+
+export async function fetchCoingeckoPrice(): Promise<number> {
+  const resp = await fetch(`${COINGECKO_BASE}/simple/price?ids=binancecoin&vs_currencies=usd`);
+  if (!resp.ok) throw new Error(`Coingecko error: ${resp.statusText}`);
+  const data = await resp.json();
+  return parseFloat(data.binancecoin.usd);
+}
+
+export async function fetchLivePrice(): Promise<Dict> {
+  // Try Chainlink first
+  try {
+    const data = await fetchChainlinkPrice();
+    if (data.price != null) return data;
+  } catch (err) {
+    console.error("Chainlink fetch error", err);
+  }
+
+  // Fallback to Binance
+  try {
+    const price = await fetchBinancePrice();
+    return {
+      price,
+      source: "binance",
+      updated_at: Math.floor(Date.now() / 1000),
+    };
+  } catch (err) {
+    console.error("Binance fetch error", err);
+  }
+
+  // Fallback to Coingecko
+  try {
+    const price = await fetchCoingeckoPrice();
+    return {
+      price,
+      source: "coingecko",
+      updated_at: Math.floor(Date.now() / 1000),
+    };
+  } catch (err) {
+    console.error("Coingecko fetch error", err);
+  }
+
+  throw new Error("All price sources failed");
+}
+
 export async function fetchCurrentEpoch(): Promise<number> {
   const contract = await getPredictionContract();
   const epoch: bigint = await contract.currentEpoch();
@@ -263,6 +358,86 @@ export async function fetchCurrentRound(): Promise<RoundData & { current_epoch: 
     ...current,
     current_epoch: epoch,
   };
+}
+
+export async function fetchBalance(address: string): Promise<number | null> {
+  const [prov] = await getWeb3();
+  if (!prov || !address) return null;
+  try {
+    const balance = await prov.getBalance(address);
+    return Number(balance) / 10 ** 18;
+  } catch (err) {
+    console.error("fetchBalance error", err);
+    return null;
+  }
+}
+
+export async function placeBet(
+  privateKey: string,
+  epoch: number,
+  side: "UP" | "DOWN",
+  amountBnb: number
+): Promise<{ hash: string } | null> {
+  const [prov] = await getWeb3();
+  if (!prov || !privateKey) return null;
+
+  try {
+    const wallet = new Wallet(privateKey, prov);
+    const contract = new Contract(
+      process.env.NEXT_PUBLIC_PREDICTION_ADDRESS || PREDICTION_ADDRESS_DEFAULT,
+      PREDICTION_ABI,
+      wallet
+    );
+
+    const method = side === "UP" ? "betBull" : "betBear";
+    // Ensure amount doesn't have too many decimals for ethers parseEther (max 18, but 9 is safe and plenty)
+    const safeAmount = Math.floor(amountBnb * 1e9) / 1e9;
+    const val = parseEther(safeAmount.toFixed(9));
+    
+    // PancakeSwap prediction contract requires epoch as argument
+    const nonce = await prov.getTransactionCount(wallet.address, "latest");
+    const tx = await contract[method](BigInt(epoch), { value: val, nonce });
+    return { hash: tx.hash };
+  } catch (err) {
+    console.error("placeBet error", err);
+    throw err;
+  }
+}
+
+export async function checkClaimable(
+  epoch: number,
+  userAddress: string
+): Promise<boolean> {
+  try {
+    const contract = await getPredictionContract();
+    return await contract.claimable(BigInt(epoch), userAddress);
+  } catch (err) {
+    console.error(`checkClaimable error for epoch ${epoch}`, err);
+    return false;
+  }
+}
+
+export async function claimRewards(
+  privateKey: string,
+  epochs: number[]
+): Promise<{ hash: string } | null> {
+  const [prov] = await getWeb3();
+  if (!prov || !privateKey || epochs.length === 0) return null;
+
+  try {
+    const wallet = new Wallet(privateKey, prov);
+    const contract = new Contract(
+      process.env.NEXT_PUBLIC_PREDICTION_ADDRESS || PREDICTION_ADDRESS_DEFAULT,
+      PREDICTION_ABI,
+      wallet
+    );
+
+    const tx = await contract.claim(epochs.map((e) => BigInt(e)));
+    return { hash: tx.hash };
+  } catch (err) {
+    console.error("claimRewards error", err);
+    throw err;
+  }
 }
 
 export async function fetchRecentRounds(limit: number = 12): Promise<RoundData[]> {
