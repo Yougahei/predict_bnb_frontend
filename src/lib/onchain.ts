@@ -9,6 +9,9 @@ export const DEFAULT_BSC_RPCS: string[] = [
   "https://bsc-dataseed.binance.org/",
   "https://bsc-dataseed1.binance.org/",
   "https://bsc-dataseed2.binance.org/",
+  "https://1rpc.io/bnb",
+  "https://binance.llamarpc.com",
+  "https://rpc.ankr.com/bsc",
 ];
 
 export const PREDICTION_ADDRESS_DEFAULT =
@@ -137,24 +140,29 @@ async function connectWeb3(): Promise<[JsonRpcProvider | null, string | null]> {
 
   for (const url of candidates) {
     try {
-      const provider = new JsonRpcProvider(url, undefined, {
-        staticNetwork: undefined,
-        batchMaxCount: 1,
+      // Create a provider with a specific network to avoid automatic detection overhead
+      const provider = new JsonRpcProvider(url, 56, {
+        staticNetwork: true, 
       });
-      // emulate timeout by racing against a timer
-      const ok = await Promise.race([
-        provider.getBlockNumber().then(
-          () => true,
-          () => false,
-        ),
-        new Promise<boolean>((resolve) =>
-          setTimeout(() => resolve(false), timeoutSec * 1000),
-        ),
-      ]);
-      if (ok) {
+      
+      // Simple connectivity check with timeout
+      const timeoutMs = 3000;
+      try {
+        await Promise.race([
+          provider.getBlockNumber(),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('timeout')), timeoutMs)
+          )
+        ]);
+        
+        console.log(`[OnChain] Connected to RPC: ${url}`);
         return [provider, url];
+      } catch (e) {
+        // console.log(`[OnChain] RPC ${url} failed/timeout`, e);
+        continue;
       }
-    } catch {
+    } catch (e) {
+      console.error(`[OnChain] RPC setup error for ${url}`, e);
       continue;
     }
   }
@@ -162,11 +170,31 @@ async function connectWeb3(): Promise<[JsonRpcProvider | null, string | null]> {
 }
 
 export async function getWeb3(): Promise<[JsonRpcProvider | null, string | null]> {
-  if (_provider) return [_provider, _providerUrl];
+  // If we already have a provider, verify it's still working
+  if (_provider) {
+    try {
+      // Quick check to see if the provider is still responsive
+      await Promise.race([
+        _provider.getBlockNumber(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
+      ]);
+      return [_provider, _providerUrl];
+    } catch (e) {
+      console.warn(`[OnChain] Existing provider ${_providerUrl} became unresponsive, reconnecting...`);
+      _provider = null;
+      _providerUrl = null;
+    }
+  }
+  if (_provider) {
+    return [_provider, _providerUrl];
+  }
   const [prov, url] = await connectWeb3();
-  _provider = prov;
-  _providerUrl = url;
-  return [prov, url];
+  if (prov && url) {
+    _provider = prov;
+    _providerUrl = url;
+    return [prov, url];
+  }
+  return [null, null];
 }
 
 async function getContract(address: string, abi: any): Promise<Contract> {
@@ -242,18 +270,52 @@ function toAmount(
 }
 
 export async function fetchChainlinkPrice(): Promise<Dict> {
-  const contract = await getChainlinkContract();
-  const [roundId, answer, startedAt, updatedAt] = await contract.latestRoundData();
-  const decimals = await getDecimals();
-  const price = toPrice(answer, decimals);
-  return {
-    price,
-    round_id: Number(roundId),
-    started_at: Number(startedAt),
-    updated_at: Number(updatedAt),
-    decimals,
-    source: "chainlink",
-  };
+  return callWithRetry(async () => {
+    const contract = await getChainlinkContract();
+    const [roundId, answer, startedAt, updatedAt] = await contract.latestRoundData();
+    const decimals = await getDecimals();
+    const price = toPrice(answer, decimals);
+    return {
+      price,
+      round_id: Number(roundId),
+      started_at: Number(startedAt),
+      updated_at: Number(updatedAt),
+      decimals,
+      source: "chainlink",
+    };
+  });
+}
+
+async function callWithRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      const isNetworkError = 
+        e.code === 'ECONNRESET' || 
+        e.code === 'ETIMEDOUT' || 
+        e.code === 'NETWORK_ERROR' ||
+        e.message?.includes('network') || 
+        e.message?.includes('timeout') ||
+        e.message?.includes('connection') ||
+        e.message?.includes('unavailable');
+
+      if (i < retries - 1) {
+        console.warn(`[OnChain] Call failed (attempt ${i + 1}/${retries}): ${e.message}`);
+        
+        if (isNetworkError) {
+          console.log("[OnChain] Network error detected, clearing provider cache...");
+          _provider = null;
+          _providerUrl = null;
+        }
+        
+        await new Promise(r => setTimeout(r, 1000 * (i + 1))); // Exponential backoff
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Unreachable");
 }
 
 export async function fetchBinancePrice(): Promise<number> {
@@ -307,9 +369,11 @@ export async function fetchLivePrice(): Promise<Dict> {
 }
 
 export async function fetchCurrentEpoch(): Promise<number> {
-  const contract = await getPredictionContract();
-  const epoch: bigint = await contract.currentEpoch();
-  return Number(epoch);
+  return callWithRetry(async () => {
+    const contract = await getPredictionContract();
+    const epoch: bigint = await contract.currentEpoch();
+    return Number(epoch);
+  });
 }
 
 export interface RoundData {
@@ -330,25 +394,27 @@ export interface RoundData {
 }
 
 export async function fetchRound(epoch: number): Promise<RoundData> {
-  const contract = await getPredictionContract();
-  const decimals = await getDecimals();
-  const data = await contract.rounds(BigInt(epoch));
-  return {
-    epoch: Number(data[0]),
-    start_ts: Number(data[1]) * 1000,
-    lock_ts: Number(data[2]) * 1000,
-    close_ts: Number(data[3]) * 1000,
-    lock_price: data[4] ? toPrice(data[4], decimals) : null,
-    close_price: data[5] ? toPrice(data[5], decimals) : null,
-    lock_oracle_id: Number(data[6]),
-    close_oracle_id: Number(data[7]),
-    total_amount: data[8] != null ? toAmount(data[8]) : null,
-    bull_amount: data[9] != null ? toAmount(data[9]) : null,
-    bear_amount: data[10] != null ? toAmount(data[10]) : null,
-    reward_base: data[11] != null ? toAmount(data[11]) : null,
-    reward_amount: data[12] != null ? toAmount(data[12]) : null,
-    oracle_called: Boolean(data[13]),
-  };
+  return callWithRetry(async () => {
+    const contract = await getPredictionContract();
+    const decimals = await getDecimals();
+    const data = await contract.rounds(BigInt(epoch));
+    return {
+      epoch: Number(data[0]),
+      start_ts: Number(data[1]) * 1000,
+      lock_ts: Number(data[2]) * 1000,
+      close_ts: Number(data[3]) * 1000,
+      lock_price: data[4] ? toPrice(data[4], decimals) : null,
+      close_price: data[5] ? toPrice(data[5], decimals) : null,
+      lock_oracle_id: Number(data[6]),
+      close_oracle_id: Number(data[7]),
+      total_amount: data[8] != null ? toAmount(data[8]) : null,
+      bull_amount: data[9] != null ? toAmount(data[9]) : null,
+      bear_amount: data[10] != null ? toAmount(data[10]) : null,
+      reward_base: data[11] != null ? toAmount(data[11]) : null,
+      reward_amount: data[12] != null ? toAmount(data[12]) : null,
+      oracle_called: Boolean(data[13]),
+    };
+  });
 }
 
 export async function fetchCurrentRound(): Promise<RoundData & { current_epoch: number }> {
@@ -409,8 +475,10 @@ export async function checkClaimable(
   userAddress: string
 ): Promise<boolean> {
   try {
-    const contract = await getPredictionContract();
-    return await contract.claimable(BigInt(epoch), userAddress);
+    return await callWithRetry(async () => {
+      const contract = await getPredictionContract();
+      return await contract.claimable(BigInt(epoch), userAddress);
+    });
   } catch (err) {
     console.error(`checkClaimable error for epoch ${epoch}`, err);
     return false;

@@ -89,6 +89,22 @@ npm run dev
 
 ## 常见问题 (FAQ)
 
+**Q: 跨平台切换时报错 "Could not locate the bindings file" (better-sqlite3)?**
+A: 这是因为 `better-sqlite3` 是原生模块，在 macOS 上编译的版本无法在 Windows 上运行（反之亦然）。
+**解决方案**：
+在切换系统后，请执行以下命令重新编译依赖：
+```bash
+# 删除依赖
+rm -rf node_modules
+
+# 重新安装 (会自动编译适合当前系统的版本)
+npm install
+```
+
+**Q: 报错 "Chainlink fetch error" 或 "ECONNRESET"?**
+A: 这是网络连接问题，通常是因为默认的 RPC 节点连接不稳定。
+系统已内置自动重试和节点切换机制。如果持续报错，请检查您的网络连接，或在代码 `src/lib/onchain.ts` 中添加更多可用的 BSC RPC 节点。
+
 **Q: 为什么日志里有时候会显示 "Too early to bet"?**
 A: 这是正常的。系统会定期轮询，如果离下注截止时间还早（例如还有 200 秒），系统会跳过下注，等待进入最佳下注窗口（通常是最后 30 秒内）。
 
