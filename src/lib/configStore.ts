@@ -1,14 +1,24 @@
-import { Pool } from 'pg';
+import { Pool, PoolConfig } from 'pg';
 
 let pool: Pool;
 
-const dbConfig = {
-  user: process.env.POSTGRES_USER || 'postgres',
-  host: process.env.POSTGRES_HOST || 'localhost',
-  database: process.env.POSTGRES_DB || 'predict_bnb',
-  password: process.env.POSTGRES_PASSWORD || 'postgres',
-  port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
-};
+// Prioritize connection string if available (e.g. from Vercel or .env)
+const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+
+const dbConfig: PoolConfig = connectionString
+  ? {
+      connectionString,
+      ssl: {
+        rejectUnauthorized: false // Required for many cloud Postgres providers (Supabase, Neon, Prisma, etc.)
+      }
+    }
+  : {
+      user: process.env.POSTGRES_USER || 'postgres',
+      host: process.env.POSTGRES_HOST || 'localhost',
+      database: process.env.POSTGRES_DB || 'predict_bnb',
+      password: process.env.POSTGRES_PASSWORD || 'postgres',
+      port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
+    };
 
 if (process.env.NODE_ENV === 'production') {
   pool = new Pool(dbConfig);
