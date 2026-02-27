@@ -3,7 +3,7 @@ import path from "node:path";
 
 const DB_PATH =
   process.env.CONFIG_DB ||
-  (process.env.VERCEL
+  (process.env.VERCEL || process.env.NODE_ENV === "production"
     ? path.join("/tmp", "predict_bnb_data", "config.db")
     : path.join(process.cwd(), "predict_bnb_data", "config.db"));
 
