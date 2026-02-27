@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=20.0.0 <23.0.0"
+    "node": "20.x"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "postinstall": "pnpm rebuild better-sqlite3",
     "clean": "rimraf node_modules .next predict_bnb_data/config.db-shm predict_bnb_data/config.db-wal"
   },
   "dependencies": {
