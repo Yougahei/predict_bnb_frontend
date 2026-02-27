@@ -11,10 +11,10 @@ export interface ModelConfig {
   enable_round_momentum: boolean;
 }
 
-export function getModelConfig(): ModelConfig {
-  const base_amount = parseFloat(getConfig("BASE_AMOUNT", "100") || "100");
-  const strategy = (getConfig("STRATEGY", "balanced") || "balanced") as StrategyName;
-  const enable_round_momentum = getConfig("ENABLE_ROUND_MOMENTUM", "1") === "1";
+export async function getModelConfig(): Promise<ModelConfig> {
+  const base_amount = parseFloat((await getConfig("BASE_AMOUNT", "100")) || "100");
+  const strategy = ((await getConfig("STRATEGY", "balanced")) || "balanced") as StrategyName;
+  const enable_round_momentum = (await getConfig("ENABLE_ROUND_MOMENTUM", "1")) === "1";
 
   return {
     base_amount,
@@ -23,15 +23,15 @@ export function getModelConfig(): ModelConfig {
   };
 }
 
-export function updateModelConfig(partial: Partial<ModelConfig>): ModelConfig {
+export async function updateModelConfig(partial: Partial<ModelConfig>): Promise<ModelConfig> {
   if (partial.base_amount !== undefined) {
-    setConfig("BASE_AMOUNT", partial.base_amount.toString());
+    await setConfig("BASE_AMOUNT", partial.base_amount.toString());
   }
   if (partial.strategy !== undefined) {
-    setConfig("STRATEGY", partial.strategy);
+    await setConfig("STRATEGY", partial.strategy);
   }
   if (partial.enable_round_momentum !== undefined) {
-    setConfig("ENABLE_ROUND_MOMENTUM", partial.enable_round_momentum ? "1" : "0");
+    await setConfig("ENABLE_ROUND_MOMENTUM", partial.enable_round_momentum ? "1" : "0");
   }
   return getModelConfig();
 }

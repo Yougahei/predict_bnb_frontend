@@ -54,14 +54,14 @@ export async function buildRecentRounds(limit: number = 12): Promise<RoundSummar
     (async () => {
       try {
         const raw = await fetchRecentRounds(limit * 3);
-        upsertRounds(raw);
+        await upsertRounds(raw);
       } catch (err) {
         console.error("Round sync error", err);
       }
     })();
   }
 
-  const rounds = getRecentRounds(limit);
+  const rounds = await getRecentRounds(limit);
   const output: RoundSummary[] = [];
   for (const r of rounds) {
     const result = roundResult(r.lock_price, r.close_price);
@@ -117,11 +117,11 @@ export interface BuildSnapshotOptions {
   autoBet?: boolean;
 }
 
-function mergeModelPredictions(epoch: number | null): AnyDict[] {
+async function mergeModelPredictions(epoch: number | null): Promise<AnyDict[]> {
   if (!epoch) return listLatestPredictions();
 
-  const currentRows = listPredictionsForEpoch(epoch);
-  const latestRows = listLatestPredictions();
+  const currentRows = await listPredictionsForEpoch(epoch);
+  const latestRows = await listLatestPredictions();
 
   const existing = new Set(
     currentRows.map((r) => `${r.model_type}::${r.model_name}`)
@@ -152,7 +152,7 @@ export async function buildSnapshot(options: BuildSnapshotOptions = {}): Promise
     fetchCurrentRound().catch(() => null),
     buildRecentRounds().catch(() => [] as RoundSummary[]),
     (async () => {
-      const addr = getConfig("WALLET_ADDRESS");
+      const addr = await getConfig("WALLET_ADDRESS");
       return addr ? fetchBalance(addr).catch(() => null) : null;
     })(),
   ]);
@@ -187,7 +187,7 @@ export async function buildSnapshot(options: BuildSnapshotOptions = {}): Promise
 
   const epoch = roundInfo.epoch;
   if (epoch && prediction) {
-    upsertPrediction({
+    await upsertPrediction({
       epoch,
       model_type: "quant",
       model_name: prediction.model || "quant",
@@ -198,7 +198,8 @@ export async function buildSnapshot(options: BuildSnapshotOptions = {}): Promise
   }
 
   // LLM Payload building
-  if (epoch && getConfig("LLM_AUTO_PREDICT") === "1") {
+  const llmAutoPredict = await getConfig("LLM_AUTO_PREDICT");
+  if (epoch && llmAutoPredict === "1") {
     const payload = {
       timestamp: nowTs,
       price,
@@ -228,13 +229,14 @@ export async function buildSnapshot(options: BuildSnapshotOptions = {}): Promise
   // Resolve predictions periodically
   if (nowTs - LAST_RESOLVE_TS > 20 * 1000) {
     LAST_RESOLVE_TS = nowTs;
-    resolvePredictions();
+    await resolvePredictions();
   }
 
-  const modelConfig = getModelConfig();
-  const modelPredictions = mergeModelPredictions(epoch);
-  const accuracyStats = getAccuracyStats();
-  const usdCnyRate = Number(getConfig("USD_CNY_RATE", "7.25") || "7.25");
+  const modelConfig = await getModelConfig();
+  const modelPredictions = await mergeModelPredictions(epoch);
+  const accuracyStats = await getAccuracyStats();
+  const usdCnyRateStr = await getConfig("USD_CNY_RATE", "7.25");
+  const usdCnyRate = Number(usdCnyRateStr || "7.25");
 
   const voteSummary =
     modelPredictions.length > 0
@@ -296,14 +298,4 @@ export async function buildSnapshot(options: BuildSnapshotOptions = {}): Promise
     wallet_balance: walletBalance,
     usd_cny_rate: usdCnyRate,
   };
-}
-
-// Background "Heartbeat" to ensure the system keeps running even without frontend activity
-if (typeof setInterval !== "undefined") {
-  setInterval(() => {
-    // Only run if auto-predict is enabled
-    if (getConfig("LLM_AUTO_PREDICT") === "1") {
-      buildSnapshot({ autoBet: true }).catch(err => console.error("Heartbeat error", err));
-    }
-  }, 30 * 1000); // Check every 30 seconds
 }

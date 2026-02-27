@@ -10,20 +10,20 @@ let isClaiming = false;
 
 export async function runAutoClaimLogic(): Promise<void> {
   if (isClaiming) return;
-  const enabled = getConfig("AUTO_BET_ENABLED") === "1";
+  const enabled = (await getConfig("AUTO_BET_ENABLED")) === "1";
   if (!enabled) return;
 
   try {
     isClaiming = true;
     // 查找超过1分钟（60秒）未领取的获胜回合
     // 这里传入 60 秒，表示查询 close_ts < now - 60 的记录
-    const epochs = getAutoClaimableEpochs(60);
+    const epochs = await getAutoClaimableEpochs(60);
     if (epochs.length === 0) return;
 
     console.log(`[AutoClaim] Found ${epochs.length} claimable epochs: ${epochs.join(", ")}`);
 
-    const privateKey = getConfig("WALLET_PRIVATE_KEY") || "";
-    const walletAddress = getConfig("WALLET_ADDRESS") || getAddressFromPrivateKey(privateKey) || "";
+    const privateKey = (await getConfig("WALLET_PRIVATE_KEY")) || "";
+    const walletAddress = (await getConfig("WALLET_ADDRESS")) || getAddressFromPrivateKey(privateKey) || "";
     if (!privateKey || !walletAddress) {
       console.error("[AutoClaim] No private key found, skipping claim.");
       return;
@@ -65,7 +65,7 @@ export async function runAutoClaimLogic(): Promise<void> {
       // Ideally claimRewards should wait. If it doesn't, we risk marking as claimed prematurely.
       // But for now, let's assume if hash is generated, it's likely to succeed.
       // Better fix: update claimRewards to wait.
-      markAsClaimed(toClaim);
+      await markAsClaimed(toClaim);
     } else {
       console.error("[AutoClaim] Failed to send claim transaction.");
     }
@@ -82,12 +82,12 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
   PROCESSING_EPOCHS.add(epoch);
 
   try {
-    const enabled = getConfig("AUTO_BET_ENABLED") === "1";
+    const enabled = (await getConfig("AUTO_BET_ENABLED")) === "1";
     if (!enabled || !voteSummary || !epoch) return;
 
     // 提前释放锁逻辑：如果不需要立即执行下注（例如已下注、或时间未到），必须尽快释放锁
     
-    const logs = listBetLogs(10);
+    const logs = await listBetLogs(10);
     const alreadyBet = logs.some(l => l.epoch === epoch && l.status !== "FAILED");
     if (alreadyBet) {
       if (PENDING_TIMEOUTS.has(epoch)) {
@@ -109,7 +109,7 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
       }
 
       // 双重检查：在发起网络请求获取 Round 数据期间，可能已经有其他线程完成了下注
-      const freshLogs = listBetLogs(5);
+      const freshLogs = await listBetLogs(5);
       if (freshLogs.some(l => l.epoch === epoch && l.status !== "FAILED")) {
           console.log(`[AutoBet] Epoch ${epoch} 已检测到最新下注记录，终止本次尝试`);
           if (PENDING_TIMEOUTS.has(epoch)) {
@@ -142,7 +142,7 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
       }
 
       // 最终保险：在准备私钥和计算金额前，再次确认是否已经下注
-      const finalCheckLogs = listBetLogs(5);
+      const finalCheckLogs = await listBetLogs(5);
       if (finalCheckLogs.some(l => l.epoch === epoch && l.status !== "FAILED")) {
         return;
       }
@@ -154,7 +154,7 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
     }
 
     // 1. Get Strategy Config
-    const { strategy } = getModelConfig();
+    const { strategy } = await getModelConfig();
 
     // 2. Apply Strategy to Vote
     const adjustedVote = applyStrategy(voteSummary, strategy);
@@ -176,14 +176,14 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
 
     // 获取数据库互斥锁
     // 只有第一个成功的会返回 true，后续都会因为主键冲突返回 false
-    const locked = acquireBetLock(epoch);
+    const locked = await acquireBetLock(epoch);
     if (!locked) {
       console.log(`[AutoBet] Failed to acquire lock for epoch ${epoch}, another process is handling it.`);
       return;
     }
 
-    const privateKey = getConfig("WALLET_PRIVATE_KEY") || "";
-    const walletAddress = getConfig("WALLET_ADDRESS") || getAddressFromPrivateKey(privateKey) || "";
+    const privateKey = (await getConfig("WALLET_PRIVATE_KEY")) || "";
+    const walletAddress = (await getConfig("WALLET_ADDRESS")) || getAddressFromPrivateKey(privateKey) || "";
     
     if (!privateKey || !walletAddress) {
       console.error("[AutoBet] Failed: Wallet credentials or address not configured");
@@ -206,7 +206,7 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
       // If config is missing, fallback to simulator dynamic logic
       // Try strategy-specific config first (e.g. BET_PERCENTAGE_AGGRESSIVE), then fallback to global BET_PERCENTAGE
       const strategyKey = `BET_PERCENTAGE_${strategy.toUpperCase()}`;
-      const userPctStr = getConfig(strategyKey) || getConfig("BET_PERCENTAGE");
+      const userPctStr = (await getConfig(strategyKey)) || (await getConfig("BET_PERCENTAGE"));
       
       if (userPctStr) {
         // User has set a specific percentage, use it as the fixed size
@@ -237,7 +237,7 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
     }
 
     // Log initial pending bet
-    const betId = logBet({
+    const betId = await logBet({
       epoch,
       side,
       amount,
@@ -250,7 +250,7 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
 
     try {
       // 再次检查，防止在 logBet 之后有其他进程刚好完成
-      const doubleCheck = listBetLogs(5);
+      const doubleCheck = await listBetLogs(5);
       // 这里的检查逻辑要放宽，只要有 SUCCESS 状态的，或者是同一个 epoch 的 PENDING 且 id 不是当前 betId 的，都算重复
       const existingBet = doubleCheck.find(l => 
         l.epoch === epoch && 
@@ -261,21 +261,21 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
       if (existingBet) {
          console.log(`[AutoBet] Detected existing bet for ${epoch} (ID: ${existingBet.id}, Status: ${existingBet.status}), aborting current bet ${betId}.`);
          // 既然已经有别的记录占坑了，那当前这条记录就没必要发交易了，直接标为 FAILED
-         updateBetStatus(betId, "FAILED", undefined, "Duplicate bet prevented (race condition)");
+         await updateBetStatus(betId, "FAILED", undefined, "Duplicate bet prevented (race condition)");
          return;
       }
 
       console.log(`[AutoBet] Placing bet for epoch ${epoch}, side ${side}, percentage ${percentage}%, calculated amount ${amount.toFixed(6)} BNB`);
       const res = await placeBet(privateKey, epoch, side, amount);
       if (res?.hash) {
-        updateBetStatus(betId, "SUCCESS", res.hash);
+        await updateBetStatus(betId, "SUCCESS", res.hash);
         console.log(`[AutoBet] Bet placed successfully: ${res.hash}`);
       } else {
         throw new Error("No transaction hash returned");
       }
     } catch (err: any) {
       console.error(`[AutoBet] Bet failed for epoch ${epoch}`, err);
-      updateBetStatus(betId, "FAILED", undefined, err.message || String(err));
+      await updateBetStatus(betId, "FAILED", undefined, err.message || String(err));
     }
   } finally {
     // 释放锁

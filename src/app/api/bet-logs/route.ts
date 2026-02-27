@@ -5,8 +5,8 @@ import { checkClaimable, fetchBalance, fetchLivePrice } from "@/lib/onchain";
 
 export async function GET() {
   try {
-    const walletAddress = getConfig("WALLET_ADDRESS");
-    const logs = listBetLogs(50, walletAddress || undefined);
+    const walletAddress = await getConfig("WALLET_ADDRESS");
+    const logs = await listBetLogs(50, walletAddress || undefined);
     
     // Check claim status for recent winning bets that are not marked as claimed
     if (walletAddress) {
@@ -24,9 +24,7 @@ export async function GET() {
             const isClaimable = await checkClaimable(log.epoch, walletAddress);
             if (!isClaimable) {
               // Mark as claimed in DB
-              // The updateBetStatus function signature is: (id, status, txHash?, error?, claimed?)
-              // We pass 'SUCCESS' as status (no change), undefined for txHash/error, and 1 for claimed.
-              updateBetStatus(log.id, "SUCCESS", undefined, undefined, 1);
+              await updateBetStatus(log.id, "SUCCESS", undefined, undefined, 1);
               // Update local log object for immediate response
               log.claimed = 1;
             }
@@ -37,7 +35,7 @@ export async function GET() {
       }
     }
 
-    const stats = getBetStats(walletAddress || undefined);
+    const stats = await getBetStats(walletAddress || undefined);
     
     let balance = 0;
     let bnbPrice = 0;

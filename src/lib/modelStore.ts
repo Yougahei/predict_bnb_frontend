@@ -8,21 +8,19 @@ export interface LLMProfile {
   enabled: boolean;
 }
 
-export function listLLMProfiles(includeDisabled: boolean = false): LLMProfile[] {
-  const conn = getDb();
+export async function listLLMProfiles(includeDisabled: boolean = false): Promise<LLMProfile[]> {
+  const conn = await getDb();
   let rows: any[];
   if (includeDisabled) {
-    rows = conn
-      .prepare(
+    const res = await conn.query(
         "SELECT name, endpoint, model, api_key, enabled FROM llm_profiles ORDER BY name"
-      )
-      .all();
+    );
+    rows = res.rows;
   } else {
-    rows = conn
-      .prepare(
+    const res = await conn.query(
         "SELECT name, endpoint, model, api_key, enabled FROM llm_profiles WHERE enabled = 1 ORDER BY name"
-      )
-      .all();
+    );
+    rows = res.rows;
   }
 
   const profiles: LLMProfile[] = rows.map((row) => ({
@@ -37,15 +35,18 @@ export function listLLMProfiles(includeDisabled: boolean = false): LLMProfile[] 
     return profiles;
   }
 
-  const apiKey = getConfig("LLM_API_KEY") || getConfig("SILICONFLOW_API_KEY");
+  const apiKey = await getConfig("LLM_API_KEY") || await getConfig("SILICONFLOW_API_KEY");
   if (apiKey) {
-    profiles.push({
-      name: "default",
-      endpoint: getConfig(
+    const endpoint = await getConfig(
         "LLM_ENDPOINT",
         "https://api.siliconflow.cn/v1/chat/completions"
-      )!,
-      model: getConfig("LLM_MODEL", "deepseek-ai/DeepSeek-V3.2")!,
+    );
+    const model = await getConfig("LLM_MODEL", "deepseek-ai/DeepSeek-V3.2");
+    
+    profiles.push({
+      name: "default",
+      endpoint: endpoint!,
+      model: model!,
       api_key: apiKey,
       enabled: true,
     });
@@ -54,13 +55,13 @@ export function listLLMProfiles(includeDisabled: boolean = false): LLMProfile[] 
   return profiles;
 }
 
-export function getLLMProfile(name: string): LLMProfile | null {
-  const conn = getDb();
-  const row = conn
-    .prepare(
-      "SELECT name, endpoint, model, api_key, enabled FROM llm_profiles WHERE name = ?"
-    )
-    .get(name) as any;
+export async function getLLMProfile(name: string): Promise<LLMProfile | null> {
+  const conn = await getDb();
+  const res = await conn.query(
+    "SELECT name, endpoint, model, api_key, enabled FROM llm_profiles WHERE name = $1",
+    [name]
+  );
+  const row = res.rows[0];
   if (!row) return null;
   return {
     name: row.name,
@@ -71,89 +72,88 @@ export function getLLMProfile(name: string): LLMProfile | null {
   };
 }
 
-export function upsertLLMProfile(profile: LLMProfile): void {
+export async function upsertLLMProfile(profile: LLMProfile): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  const conn = getDb();
-  conn
-    .prepare(
+  const conn = await getDb();
+  await conn.query(
       `INSERT INTO llm_profiles (name, endpoint, model, api_key, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT(name) DO UPDATE SET
          endpoint = excluded.endpoint,
          model = excluded.model,
          api_key = excluded.api_key,
          enabled = excluded.enabled,
          updated_at = excluded.updated_at`,
-    )
-    .run(
-      profile.name,
-      profile.endpoint,
-      profile.model,
-      profile.api_key,
-      profile.enabled ? 1 : 0,
-      now,
-      now
-    );
+      [
+        profile.name,
+        profile.endpoint,
+        profile.model,
+        profile.api_key,
+        profile.enabled ? 1 : 0,
+        now,
+        now
+      ]
+  );
 }
 
-export function deleteLLMProfile(name: string): void {
-  const conn = getDb();
-  conn.prepare("DELETE FROM llm_profiles WHERE name = ?").run(name);
-  conn
-    .prepare("DELETE FROM model_predictions WHERE model_type = 'llm' AND model_name = ?")
-    .run(name);
+export async function deleteLLMProfile(name: string): Promise<void> {
+  const conn = await getDb();
+  await conn.query("DELETE FROM llm_profiles WHERE name = $1", [name]);
+  await conn.query("DELETE FROM model_predictions WHERE model_type = 'llm' AND model_name = $1", [name]);
 }
 
-export function upsertPrediction(params: {
+export async function upsertPrediction(params: {
   epoch: number;
   model_type: string;
   model_name: string;
   predicted_direction: string | null;
   predicted_price: number | null;
   prediction_text: string | null;
-}): void {
+}): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  const conn = getDb();
-  conn
-    .prepare(
+  const conn = await getDb();
+  await conn.query(
       `INSERT INTO model_predictions (
           epoch, model_type, model_name, predicted_direction, predicted_price, prediction_text, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT(epoch, model_type, model_name) DO UPDATE SET
           predicted_direction = excluded.predicted_direction,
           predicted_price = excluded.predicted_price,
           prediction_text = excluded.prediction_text,
           created_at = excluded.created_at`,
-    )
-    .run(
-      params.epoch,
-      params.model_type,
-      params.model_name,
-      params.predicted_direction,
-      params.predicted_price,
-      params.prediction_text,
-      now
-    );
+      [
+        params.epoch,
+        params.model_type,
+        params.model_name,
+        params.predicted_direction,
+        params.predicted_price,
+        params.prediction_text,
+        now
+      ]
+  );
 }
 
-export function listPredictionsForEpoch(epoch: number): any[] {
-  const conn = getDb();
-  return conn
-    .prepare(
-      `SELECT model_type, model_name, predicted_direction, predicted_price, prediction_text,
+export async function listPredictionsForEpoch(epoch: number): Promise<any[]> {
+  const conn = await getDb();
+  const res = await conn.query(
+    `SELECT model_type, model_name, predicted_direction, predicted_price, prediction_text,
               actual_direction, correct, epoch
        FROM model_predictions
-       WHERE epoch = ?
-       ORDER BY model_type, model_name`
-    )
-    .all(epoch);
+       WHERE epoch = $1
+       ORDER BY model_type, model_name`,
+    [epoch]
+  );
+  return res.rows.map(r => ({
+      ...r,
+      epoch: Number(r.epoch),
+      predicted_price: r.predicted_price ? parseFloat(r.predicted_price) : null
+  }));
 }
 
-export function listLatestPredictions(): any[] {
-  const conn = getDb();
-  return conn
-    .prepare(
-      `SELECT mp.model_type, mp.model_name, mp.predicted_direction, mp.predicted_price,
+export async function listLatestPredictions(): Promise<any[]> {
+  const conn = await getDb();
+  const res = await conn.query(
+    `SELECT mp.model_type, mp.model_name, mp.predicted_direction, mp.predicted_price,
               mp.prediction_text, mp.actual_direction, mp.correct, mp.epoch
        FROM model_predictions mp
        JOIN (
@@ -165,49 +165,52 @@ export function listLatestPredictions(): any[] {
           AND mp.model_name = latest.model_name
           AND mp.epoch = latest.max_epoch
        ORDER BY mp.model_type, mp.model_name`
-    )
-    .all();
+  );
+  return res.rows.map(r => ({
+      ...r,
+      epoch: Number(r.epoch),
+      predicted_price: r.predicted_price ? parseFloat(r.predicted_price) : null
+  }));
 }
 
-export function getLastPredictionDirection(
+export async function getLastPredictionDirection(
   modelType: string,
   modelName: string
-): string | null {
-  const conn = getDb();
-  const row = conn
-    .prepare(
-      `SELECT predicted_direction
+): Promise<string | null> {
+  const conn = await getDb();
+  const res = await conn.query(
+    `SELECT predicted_direction
        FROM model_predictions
-       WHERE model_type = ? AND model_name = ? AND predicted_direction IS NOT NULL
+       WHERE model_type = $1 AND model_name = $2 AND predicted_direction IS NOT NULL
        ORDER BY epoch DESC, created_at DESC
-       LIMIT 1`
-    )
-    .get(modelType, modelName) as { predicted_direction: string } | undefined;
+       LIMIT 1`,
+    [modelType, modelName]
+  );
+  const row = res.rows[0];
   return row ? row.predicted_direction : null;
 }
 
-export function getLastPredictionTime(
+export async function getLastPredictionTime(
   modelType: string,
   modelName: string,
   epoch: number
-): number {
-  const conn = getDb();
-  const row = conn
-    .prepare(
-      `SELECT created_at
+): Promise<number> {
+  const conn = await getDb();
+  const res = await conn.query(
+    `SELECT created_at
        FROM model_predictions
-       WHERE model_type = ? AND model_name = ? AND epoch = ?
+       WHERE model_type = $1 AND model_name = $2 AND epoch = $3
        ORDER BY created_at DESC
-       LIMIT 1`
-    )
-    .get(modelType, modelName, epoch) as { created_at: number } | undefined;
-  return row ? row.created_at : 0;
+       LIMIT 1`,
+    [modelType, modelName, epoch]
+  );
+  const row = res.rows[0];
+  return row ? Number(row.created_at) : 0;
 }
 
-export function getAccuracyStats(): any[] {
-  const conn = getDb();
-  const rows = conn
-    .prepare(
+export async function getAccuracyStats(): Promise<any[]> {
+  const conn = await getDb();
+  const res = await conn.query(
       `SELECT model_type, model_name,
               SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END) as correct,
               SUM(CASE WHEN predicted_direction IN ('UP', 'DOWN') THEN 1 ELSE 0 END) as acted,
@@ -216,8 +219,8 @@ export function getAccuracyStats(): any[] {
        WHERE actual_direction IS NOT NULL
        GROUP BY model_type, model_name
        ORDER BY model_type, model_name`
-    )
-    .all() as any[];
+  );
+  const rows = res.rows;
 
   const statsMap = new Map<string, any>();
   for (const row of rows) {
@@ -235,7 +238,8 @@ export function getAccuracyStats(): any[] {
     });
   }
 
-  for (const profile of listLLMProfiles()) {
+  const profiles = await listLLMProfiles();
+  for (const profile of profiles) {
     const key = `llm::${profile.name || profile.model}`;
     if (!statsMap.has(key)) {
       statsMap.set(key, {
@@ -258,36 +262,37 @@ export function getAccuracyStats(): any[] {
   return stats;
 }
 
-export function clearPredictionStats(): number {
-  const conn = getDb();
-  const result = conn
-    .prepare("DELETE FROM model_predictions WHERE actual_direction IS NOT NULL")
-    .run();
-  return result.changes;
+export async function clearPredictionStats(): Promise<number> {
+  const conn = await getDb();
+  const res = await conn.query("DELETE FROM model_predictions WHERE actual_direction IS NOT NULL");
+  return res.rowCount || 0;
 }
 
-export function resolvePredictions(): number {
-  const conn = getDb();
-  const rows = conn
-    .prepare(
-      `SELECT p.id, p.epoch, r.lock_price, r.close_price, p.predicted_direction
-       FROM model_predictions p
-       JOIN round_history r ON r.epoch = p.epoch
-       WHERE p.actual_direction IS NULL
-         AND r.oracle_called = 1
-         AND r.close_price IS NOT NULL`
-    )
-    .all() as any[];
+export async function resolvePredictions(): Promise<number> {
+  const pool = await getDb();
+  const client = await pool.connect();
 
-  if (rows.length === 0) return 0;
+  try {
+    await client.query('BEGIN');
+    
+    const res = await client.query(
+        `SELECT p.id, p.epoch, r.lock_price, r.close_price, p.predicted_direction
+        FROM model_predictions p
+        JOIN round_history r ON r.epoch = p.epoch
+        WHERE p.actual_direction IS NULL
+            AND r.oracle_called = 1
+            AND r.close_price IS NOT NULL`
+    );
+    const rows = res.rows;
 
-  const now = Math.floor(Date.now() / 1000);
-  const update = conn.prepare(
-    "UPDATE model_predictions SET actual_direction = ?, resolved_at = ?, correct = ? WHERE id = ?"
-  );
+    if (rows.length === 0) {
+        await client.query('COMMIT');
+        return 0;
+    }
 
-  const transaction = conn.transaction((items: any[]) => {
-    for (const row of items) {
+    const now = Math.floor(Date.now() / 1000);
+
+    for (const row of rows) {
       const { id, lock_price, close_price, predicted_direction } = row;
       if (lock_price == null || close_price == null) continue;
 
@@ -301,10 +306,18 @@ export function resolvePredictions(): number {
         correct = predicted_direction === actual ? 1 : 0;
       }
 
-      update.run(actual, now, correct, id);
+      await client.query(
+        "UPDATE model_predictions SET actual_direction = $1, resolved_at = $2, correct = $3 WHERE id = $4",
+        [actual, now, correct, id]
+      );
     }
-  });
-
-  transaction(rows);
-  return rows.length;
+    
+    await client.query('COMMIT');
+    return rows.length;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }

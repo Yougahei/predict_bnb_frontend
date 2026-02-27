@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: predict_bnb_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-predict_bnb}
+      POSTGRES_PORT: 5432
+      # Add other environment variables as needed
+      NEXT_PUBLIC_VERCEL_URL: http://localhost:3000
+    depends_on:
+      - postgres
+    networks:
+      - predict_bnb_net
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: predict_bnb_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-predict_bnb}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - predict_bnb_net
+
+volumes:
+  postgres_data:
+
+networks:
+  predict_bnb_net:
+    driver: bridge

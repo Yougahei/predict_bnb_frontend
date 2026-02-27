@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { listLLMProfiles, upsertLLMProfile, deleteLLMProfile } from "@/lib/modelStore";
 
 export async function GET() {
-  const profiles = listLLMProfiles(true);
+  const profiles = await listLLMProfiles(true);
   return NextResponse.json(profiles);
 }
 
@@ -12,11 +12,11 @@ export async function POST(req: Request) {
     const { action, ...profile } = body;
 
     if (action === "delete") {
-      deleteLLMProfile(profile.name);
+      await deleteLLMProfile(profile.name);
       return NextResponse.json({ success: true });
     }
 
-    upsertLLMProfile({
+    await upsertLLMProfile({
       name: profile.name,
       endpoint: profile.endpoint,
       model: profile.model,

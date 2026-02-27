@@ -92,22 +92,26 @@ async function requestLLM(
   const { endpoint, model, api_key } = profile;
   if (!endpoint || !model || !api_key) return null;
 
-  const enableThinking = getConfig("LLM_ENABLE_THINKING") === "1";
+  const enableThinking = (await getConfig("LLM_ENABLE_THINKING")) === "1";
 
-  const body = {
+  const body: any = {
     model,
     messages: buildMessages(payload, allowAbstain),
     temperature: 0.2,
     max_tokens: 220,
-    enable_thinking: enableThinking,
   };
+  
+  if (enableThinking) {
+    body.enable_thinking = true;
+  }
 
   const headers = {
     Authorization: `Bearer ${api_key}`,
     "Content-Type": "application/json",
   };
 
-  const timeout = parseInt(getConfig("LLM_TIMEOUT", "12") || "12") * 1000;
+  const timeoutStr = (await getConfig("LLM_TIMEOUT", "12")) || "12";
+  const timeout = parseInt(timeoutStr) * 1000;
 
   try {
     const controller = new AbortController();
@@ -156,7 +160,7 @@ export async function scheduleLLMPredictions(
 ): Promise<void> {
   if (!epoch) return;
 
-  const profiles = listLLMProfiles();
+  const profiles = await listLLMProfiles();
   if (!profiles.length) return;
 
   for (const profile of profiles) {
@@ -164,10 +168,11 @@ export async function scheduleLLMPredictions(
     const cacheKey = `llm:${name}:${epoch}`;
 
     // Check memory cache first
-    if (cacheGet(cacheKey, 120)) continue;
+    const cached = cacheGet(cacheKey, 120);
+    if (cached) continue;
     
     // Check database to persist interval across restarts/refreshes
-    const lastTime = getLastPredictionTime("llm", name, epoch);
+    const lastTime = await getLastPredictionTime("llm", name, epoch);
     const nowTsSec = Math.floor(Date.now() / 1000);
     if (nowTsSec - lastTime < 120) {
       // Still within 2 minutes gap for this epoch
@@ -181,7 +186,7 @@ export async function scheduleLLMPredictions(
     // Run in "background"
     (async () => {
       try {
-        const lastDir = getLastPredictionDirection("llm", name);
+        const lastDir = await getLastPredictionDirection("llm", name);
         const allowAbstain = lastDir !== "ABSTAIN";
 
         const result = await requestLLM(profile, payload, allowAbstain);
@@ -197,7 +202,7 @@ export async function scheduleLLMPredictions(
         }
 
         if (result && !result.summary.startsWith("ERROR")) {
-          upsertPrediction({
+          await upsertPrediction({
             epoch,
             model_type: "llm",
             model_name: name,

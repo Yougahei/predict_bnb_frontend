@@ -120,17 +120,17 @@ const CONFIG_GROUPS = [
 ];
 
 export async function GET() {
-  const groups = CONFIG_GROUPS.map((group) => ({
+  const groups = await Promise.all(CONFIG_GROUPS.map(async (group) => ({
     title: group.title,
-    fields: group.fields.map((field) => {
-      const value = getConfig(field.key);
+    fields: await Promise.all(group.fields.map(async (field) => {
+      const value = await getConfig(field.key);
       return {
         ...field,
         value: value || "",
         has_value: !!value,
       };
-    }),
-  }));
+    })),
+  })));
 
   return NextResponse.json({ groups });
 }
@@ -141,9 +141,9 @@ export async function POST(req: Request) {
     const { key, value, clear } = body;
 
     if (clear) {
-      setConfig(key, null);
+      await setConfig(key, null);
     } else {
-      setConfig(key, value);
+      await setConfig(key, value);
     }
 
     return NextResponse.json({ success: true });
