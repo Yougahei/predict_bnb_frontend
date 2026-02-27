@@ -10,8 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "postinstall": "pnpm rebuild better-sqlite3",
-    "clean": "rimraf node_modules .next predict_bnb_data/config.db-shm predict_bnb_data/config.db-wal"
+    "clean": "rimraf node_modules .next predict_bnb_data/config.db predict_bnb_data/config.db-shm predict_bnb_data/config.db-wal"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
