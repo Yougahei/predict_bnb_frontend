@@ -6,24 +6,34 @@ let pool: Pool;
 // We replace sslmode=require with sslmode=no-verify to silence the warning about libpq security changes,
 // since we are explicitly setting rejectUnauthorized: false below which handles the security posture we want (allow self-signed/cloud certs).
 let connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+
+// IMPORTANT: In local development, we often don't have SSL enabled on the Docker container.
+// If we are connecting to localhost, we should probably strip SSL requirements or connection string
+// unless explicitly configured.
+const isLocalhost = (connectionString && (connectionString.includes('localhost') || connectionString.includes('127.0.0.1'))) 
+                    || (!connectionString && (process.env.POSTGRES_HOST === 'localhost' || process.env.POSTGRES_HOST === '127.0.0.1'));
+
 if (connectionString && connectionString.includes('sslmode=require')) {
   connectionString = connectionString.replace('sslmode=require', 'sslmode=no-verify');
 }
 
-const dbConfig: PoolConfig = connectionString
-  ? {
-      connectionString,
-      ssl: {
-        rejectUnauthorized: false // Required for many cloud Postgres providers (Supabase, Neon, Prisma, etc.)
-      }
-    }
-  : {
-      user: process.env.POSTGRES_USER || 'postgres',
-      host: process.env.POSTGRES_HOST || 'localhost',
-      database: process.env.POSTGRES_DB || 'predict_bnb',
-      password: process.env.POSTGRES_PASSWORD || 'postgres',
-      port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
-    };
+let dbConfig: PoolConfig;
+
+if (connectionString) {
+  dbConfig = {
+    connectionString,
+    ssl: isLocalhost ? false : { rejectUnauthorized: false }
+  };
+} else {
+  dbConfig = {
+    user: process.env.POSTGRES_USER || 'postgres',
+    host: process.env.POSTGRES_HOST || 'localhost',
+    database: process.env.POSTGRES_DB || 'predict_bnb',
+    password: process.env.POSTGRES_PASSWORD || 'postgres',
+    port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
+    ssl: false // Explicitly disable SSL for individual params config (usually local)
+  };
+}
 
 if (process.env.NODE_ENV === 'production') {
   pool = new Pool(dbConfig);

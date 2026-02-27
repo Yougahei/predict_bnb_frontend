@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { listBetLogs } from "@/lib/betStore";
+import { listBetLogs, markAsClaimed } from "@/lib/betStore";
 import { getConfig, getDb } from "@/lib/configStore";
-import { checkClaimable } from "@/lib/onchain";
+import { checkClaimable, claimRewards, getAddressFromPrivateKey } from "@/lib/onchain";
 
 export async function GET() {
   try {
@@ -42,5 +42,33 @@ export async function GET() {
   } catch (error) {
     console.error("claim check error", error);
     return NextResponse.json({ error: "failed" }, { status: 500 });
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { epochs } = body;
+
+    if (!epochs || !Array.isArray(epochs) || epochs.length === 0) {
+      return NextResponse.json({ error: "invalid_epochs" }, { status: 400 });
+    }
+
+    const privateKey = await getConfig("WALLET_PRIVATE_KEY");
+    if (!privateKey) {
+      return NextResponse.json({ error: "wallet_not_configured" }, { status: 400 });
+    }
+
+    const res = await claimRewards(privateKey, epochs);
+    if (res && res.hash) {
+      // Mark as claimed in DB
+      await markAsClaimed(epochs);
+      return NextResponse.json({ success: true, hash: res.hash });
+    } else {
+      return NextResponse.json({ error: "claim_failed", details: "Transaction failed or no hash returned" }, { status: 500 });
+    }
+  } catch (error: any) {
+    console.error("Claim error:", error);
+    return NextResponse.json({ error: "failed", details: error?.message || String(error) }, { status: 500 });
   }
 }

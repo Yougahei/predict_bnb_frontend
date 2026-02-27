@@ -78,11 +78,16 @@ export async function runAutoClaimLogic(): Promise<void> {
 
 export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null): Promise<void> {
   // 0. 全局互斥锁：确保同一时间针对同一 epoch 只有一个执行流在运行
-  if (PROCESSING_EPOCHS.has(epoch)) return;
+  if (PROCESSING_EPOCHS.has(epoch)) {
+    console.log(`[AutoBet] Epoch ${epoch} is already processing (local lock).`);
+    return;
+  }
   PROCESSING_EPOCHS.add(epoch);
 
   try {
     const enabled = (await getConfig("AUTO_BET_ENABLED")) === "1";
+    console.log(`[AutoBet] Triggered for epoch ${epoch}. Enabled: ${enabled}`);
+    
     if (!enabled || !voteSummary || !epoch) return;
 
     // 提前释放锁逻辑：如果不需要立即执行下注（例如已下注、或时间未到），必须尽快释放锁
@@ -90,6 +95,7 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
     const logs = await listBetLogs(10);
     const alreadyBet = logs.some(l => l.epoch === epoch && l.status !== "FAILED");
     if (alreadyBet) {
+      console.log(`[AutoBet] Epoch ${epoch} already bet (found in logs).`);
       if (PENDING_TIMEOUTS.has(epoch)) {
         clearTimeout(PENDING_TIMEOUTS.get(epoch));
         PENDING_TIMEOUTS.delete(epoch);

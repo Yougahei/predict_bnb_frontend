@@ -3,7 +3,7 @@ import { buildSnapshot } from "@/lib/snapshot";
 
 export async function GET() {
   try {
-    const data = await buildSnapshot({ autoBet: false });
+    const data = await buildSnapshot({ autoBet: true });
     return NextResponse.json(data);
   } catch (error: any) {
     console.error("Error building snapshot:", error);

@@ -135,18 +135,21 @@ export async function upsertPrediction(params: {
 
 export async function listPredictionsForEpoch(epoch: number): Promise<any[]> {
   const conn = await getDb();
+  // Only include LLM predictions if the profile still exists
   const res = await conn.query(
-    `SELECT model_type, model_name, predicted_direction, predicted_price, prediction_text,
-              actual_direction, correct, epoch
-       FROM model_predictions
-       WHERE epoch = $1
-       ORDER BY model_type, model_name`,
+    `SELECT mp.model_type, mp.model_name, mp.predicted_direction, mp.predicted_price, mp.prediction_text,
+            mp.actual_direction, mp.correct, mp.epoch
+     FROM model_predictions mp
+     LEFT JOIN llm_profiles lp ON mp.model_name = lp.name AND mp.model_type = 'llm'
+     WHERE mp.epoch = $1
+       AND (mp.model_type != 'llm' OR lp.name IS NOT NULL)
+     ORDER BY mp.model_type, mp.model_name`,
     [epoch]
   );
   return res.rows.map(r => ({
-      ...r,
-      epoch: Number(r.epoch),
-      predicted_price: r.predicted_price ? parseFloat(r.predicted_price) : null
+    ...r,
+    epoch: Number(r.epoch),
+    predicted_price: r.predicted_price ? parseFloat(r.predicted_price) : null
   }));
 }
 
@@ -154,22 +157,24 @@ export async function listLatestPredictions(): Promise<any[]> {
   const conn = await getDb();
   const res = await conn.query(
     `SELECT mp.model_type, mp.model_name, mp.predicted_direction, mp.predicted_price,
-              mp.prediction_text, mp.actual_direction, mp.correct, mp.epoch
-       FROM model_predictions mp
-       JOIN (
-           SELECT model_type, model_name, MAX(epoch) AS max_epoch
-           FROM model_predictions
-           GROUP BY model_type, model_name
-       ) latest
-       ON mp.model_type = latest.model_type
-          AND mp.model_name = latest.model_name
-          AND mp.epoch = latest.max_epoch
-       ORDER BY mp.model_type, mp.model_name`
+            mp.prediction_text, mp.actual_direction, mp.correct, mp.epoch
+     FROM model_predictions mp
+     LEFT JOIN llm_profiles lp ON mp.model_name = lp.name AND mp.model_type = 'llm'
+     JOIN (
+         SELECT model_type, model_name, MAX(epoch) AS max_epoch
+         FROM model_predictions
+         GROUP BY model_type, model_name
+     ) latest
+     ON mp.model_type = latest.model_type
+        AND mp.model_name = latest.model_name
+        AND mp.epoch = latest.max_epoch
+     WHERE (mp.model_type != 'llm' OR lp.name IS NOT NULL)
+     ORDER BY mp.model_type, mp.model_name`
   );
   return res.rows.map(r => ({
-      ...r,
-      epoch: Number(r.epoch),
-      predicted_price: r.predicted_price ? parseFloat(r.predicted_price) : null
+    ...r,
+    epoch: Number(r.epoch),
+    predicted_price: r.predicted_price ? parseFloat(r.predicted_price) : null
   }));
 }
 
@@ -200,6 +205,8 @@ export async function getLastPredictionTime(
     `SELECT created_at
        FROM model_predictions
        WHERE model_type = $1 AND model_name = $2 AND epoch = $3
+         AND predicted_direction IS NOT NULL
+         AND (prediction_text IS NULL OR prediction_text NOT LIKE 'ERROR:%')
        ORDER BY created_at DESC
        LIMIT 1`,
     [modelType, modelName, epoch]
@@ -211,14 +218,16 @@ export async function getLastPredictionTime(
 export async function getAccuracyStats(): Promise<any[]> {
   const conn = await getDb();
   const res = await conn.query(
-      `SELECT model_type, model_name,
-              SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END) as correct,
-              SUM(CASE WHEN predicted_direction IN ('UP', 'DOWN') THEN 1 ELSE 0 END) as acted,
+      `SELECT mp.model_type, mp.model_name,
+              SUM(CASE WHEN mp.correct = 1 THEN 1 ELSE 0 END) as correct,
+              SUM(CASE WHEN mp.predicted_direction IN ('UP', 'DOWN') THEN 1 ELSE 0 END) as acted,
               COUNT(*) as total
-       FROM model_predictions
-       WHERE actual_direction IS NOT NULL
-       GROUP BY model_type, model_name
-       ORDER BY model_type, model_name`
+       FROM model_predictions mp
+       LEFT JOIN llm_profiles lp ON mp.model_name = lp.name AND mp.model_type = 'llm'
+       WHERE mp.actual_direction IS NOT NULL
+         AND (mp.model_type != 'llm' OR lp.name IS NOT NULL)
+       GROUP BY mp.model_type, mp.model_name
+       ORDER BY mp.model_type, mp.model_name`
   );
   const rows = res.rows;
 

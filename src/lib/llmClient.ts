@@ -89,8 +89,34 @@ async function requestLLM(
   payload: any,
   allowAbstain: boolean
 ): Promise<{ direction: string | null; summary: string; raw: string } | null> {
-  const { endpoint, model, api_key } = profile;
-  if (!endpoint || !model || !api_key) return null;
+  let endpoint = profile.endpoint;
+  let model = profile.model;
+  let apiKey = profile.api_key;
+
+  if (endpoint && !/^https?:\/\//i.test(endpoint)) {
+    if (!model) {
+      model = endpoint;
+    }
+    endpoint =
+      (await getConfig("LLM_ENDPOINT")) ||
+      "https://api.siliconflow.cn/v1/chat/completions";
+  }
+
+  if (!endpoint) {
+    endpoint =
+      (await getConfig("LLM_ENDPOINT")) ||
+      "https://api.siliconflow.cn/v1/chat/completions";
+  }
+
+  if (!model) {
+    model = (await getConfig("LLM_MODEL")) || "";
+  }
+
+  if (!apiKey) {
+    apiKey = (await getConfig("LLM_API_KEY")) || (await getConfig("SILICONFLOW_API_KEY")) || "";
+  }
+
+  if (!endpoint || !model || !apiKey) return null;
 
   const enableThinking = (await getConfig("LLM_ENABLE_THINKING")) === "1";
 
@@ -106,11 +132,11 @@ async function requestLLM(
   }
 
   const headers = {
-    Authorization: `Bearer ${api_key}`,
+    Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
   };
 
-  const timeoutStr = (await getConfig("LLM_TIMEOUT", "12")) || "12";
+  const timeoutStr = (await getConfig("LLM_TIMEOUT", "30")) || "30";
   const timeout = parseInt(timeoutStr) * 1000;
 
   try {
@@ -131,7 +157,9 @@ async function requestLLM(
         await new Promise((resolve) => setTimeout(resolve, 3000));
         return requestLLM(profile, payload, allowAbstain);
       }
-      throw new Error(`HTTP error: ${resp.status}`);
+      const text = await resp.text().catch(() => "");
+      const snippet = text ? text.slice(0, 600) : "";
+      throw new Error(`HTTP error: ${resp.status}${snippet ? ` - ${snippet}` : ""}`);
     }
 
     const data = await resp.json();
@@ -190,6 +218,9 @@ export async function scheduleLLMPredictions(
         const allowAbstain = lastDir !== "ABSTAIN";
 
         const result = await requestLLM(profile, payload, allowAbstain);
+        if (result) {
+          cacheSet(cacheKey, result);
+        }
 
         if (result && result.direction === "ABSTAIN" && !allowAbstain) {
           // Force fallback if abstain not allowed
@@ -201,6 +232,18 @@ export async function scheduleLLMPredictions(
           }
         }
 
+        if (result && result.summary.startsWith("ERROR")) {
+          await upsertPrediction({
+            epoch,
+            model_type: "llm",
+            model_name: name,
+            predicted_direction: null,
+            predicted_price: null,
+            prediction_text: result.summary.slice(0, 600),
+          });
+          return;
+        }
+
         if (result && !result.summary.startsWith("ERROR")) {
           await upsertPrediction({
             epoch,
@@ -210,7 +253,7 @@ export async function scheduleLLMPredictions(
             predicted_price: null,
             prediction_text: result.summary,
           });
-          cacheSet(cacheKey, result);
+          return;
         }
       } catch (err) {
         console.error(`LLM prediction error for ${name}`, err);
