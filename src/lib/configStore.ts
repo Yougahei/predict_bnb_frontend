@@ -3,7 +3,12 @@ import { Pool, PoolConfig } from 'pg';
 let pool: Pool;
 
 // Prioritize connection string if available (e.g. from Vercel or .env)
-const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+// We replace sslmode=require with sslmode=no-verify to silence the warning about libpq security changes,
+// since we are explicitly setting rejectUnauthorized: false below which handles the security posture we want (allow self-signed/cloud certs).
+let connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+if (connectionString && connectionString.includes('sslmode=require')) {
+  connectionString = connectionString.replace('sslmode=require', 'sslmode=no-verify');
+}
 
 const dbConfig: PoolConfig = connectionString
   ? {
@@ -94,28 +99,60 @@ const TABLES = [
   `CREATE INDEX IF NOT EXISTS idx_round_close_ts ON round_history(close_ts)`
 ];
 
-let initialized = false;
+let initPromise: Promise<void> | null = null;
 
 export async function getDb() {
-  if (!initialized) {
-    try {
-      for (const sql of TABLES) {
-        await pool.query(sql);
-      }
-      
-      // Migrations
-      try { await pool.query("ALTER TABLE bet_logs ADD COLUMN IF NOT EXISTS claimed INTEGER DEFAULT 0"); } catch (e) {}
-      try { await pool.query("ALTER TABLE bet_logs ADD COLUMN IF NOT EXISTS wallet_address TEXT"); } catch (e) {}
-
-      initialized = true;
-    } catch (e) {
-      console.error("Failed to initialize DB", e);
-      // Don't throw immediately, allow retries or handling by caller
-      // But for getDb, maybe we should?
-      // If DB is down, we can't do much.
-      throw e;
+  if (process.env.NODE_ENV !== 'production') {
+    if ((global as any).dbInitPromise) {
+      initPromise = (global as any).dbInitPromise;
     }
   }
+
+  if (!initPromise) {
+    initPromise = (async () => {
+      try {
+        for (const sql of TABLES) {
+          try {
+            await pool.query(sql);
+          } catch (e: any) {
+            // Ignore unique constraint violation on pg_type (race condition during table creation)
+            if (e.code === '23505' && e.constraint === 'pg_type_typname_nsp_index') {
+              continue;
+            }
+            // Ignore "relation already exists" if IF NOT EXISTS somehow failed to catch it
+            if (e.code === '42P07') {
+              continue;
+            }
+            throw e;
+          }
+        }
+        
+        // Migrations
+        try { await pool.query("ALTER TABLE bet_logs ADD COLUMN IF NOT EXISTS claimed INTEGER DEFAULT 0"); } catch (e) {}
+        try { await pool.query("ALTER TABLE bet_logs ADD COLUMN IF NOT EXISTS wallet_address TEXT"); } catch (e) {}
+
+      } catch (e) {
+        console.error("Failed to initialize DB", e);
+        throw e;
+      }
+    })();
+
+    if (process.env.NODE_ENV !== 'production') {
+      (global as any).dbInitPromise = initPromise;
+    }
+  }
+
+  try {
+    await initPromise;
+  } catch (e) {
+    // If initialization failed, reset the promise so it can be retried (or handled by upper layers)
+    initPromise = null;
+    if (process.env.NODE_ENV !== 'production') {
+      (global as any).dbInitPromise = null;
+    }
+    throw e;
+  }
+  
   return pool;
 }
 
