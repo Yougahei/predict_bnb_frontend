@@ -1,10 +1,19 @@
 import Database from "better-sqlite3";
 import path from "node:path";
+import os from "node:os";
+
+// Detect environment: Vercel, AWS Lambda, or local production build
+const isVercel = process.env.VERCEL === "1" || process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL;
+const isLambda = process.env.AWS_LAMBDA_FUNCTION_NAME || process.cwd().startsWith("/var/task");
+const isProduction = process.env.NODE_ENV === "production";
+
+// Use temp directory in serverless environments or when explicitly requested
+const useTempDir = isVercel || isLambda || (isProduction && process.cwd() === "/");
 
 const DB_PATH =
   process.env.CONFIG_DB ||
-  (process.env.VERCEL || process.env.NODE_ENV === "production"
-    ? path.join("/tmp", "predict_bnb_data", "config.db")
+  (useTempDir
+    ? path.join(os.tmpdir(), "predict_bnb_data", "config.db")
     : path.join(process.cwd(), "predict_bnb_data", "config.db"));
 
 const TABLES = [
@@ -77,9 +86,36 @@ export function getDb(): Database.Database {
   if (!db) {
     // Ensure directory exists
     const dir = path.dirname(DB_PATH);
-    const fs = require('fs');
+    const fs = require('node:fs');
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+      } catch (err: any) {
+        // Fallback to /tmp if mkdir fails (e.g. permission denied)
+        if (err.code === 'EACCES' || err.code === 'EROFS') {
+          console.warn(`[ConfigStore] Write permission denied at ${dir}, falling back to OS temp dir.`);
+          const tempDir = path.join(os.tmpdir(), "predict_bnb_data");
+          if (!fs.existsSync(tempDir)) {
+             fs.mkdirSync(tempDir, { recursive: true });
+          }
+          // Update DB_PATH for this session (hacky but necessary)
+          // Note: DB_PATH is const, so we can't reassign it. We should have used let.
+          // But since we are inside getDb, we can just open the new path.
+          const newDbPath = path.join(tempDir, "config.db");
+          db = new Database(newDbPath);
+          db.pragma("journal_mode = WAL");
+          for (const sql of TABLES) {
+            db.exec(sql);
+          }
+          
+          // Migration for fallback DB
+          try { db.exec("ALTER TABLE bet_logs ADD COLUMN claimed INTEGER DEFAULT 0"); } catch (e) {}
+          try { db.exec("ALTER TABLE bet_logs ADD COLUMN wallet_address TEXT"); } catch (e) {}
+          
+          return db;
+        }
+        throw err;
+      }
     }
 
     db = new Database(DB_PATH);
