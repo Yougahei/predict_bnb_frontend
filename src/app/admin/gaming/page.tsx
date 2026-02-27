@@ -1,17 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-
-function formatTs(ts: number | null) {
-  if (!ts) return "--";
-  return new Date(ts).toLocaleString();
-}
-
-function formatNumber(value: number | null | undefined, digits = 4) {
-  if (value == null || Number.isNaN(value)) return "--";
-  return value.toFixed(digits);
-}
+import { formatTs, formatNumber } from "@/lib/format";
+import { PageHeader } from "@/components/admin/page-header";
+import { StatsCard } from "@/components/admin/stats-card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 export default function GamingPage() {
   const [state, setState] = useState<any>(null);
@@ -20,10 +26,14 @@ export default function GamingPage() {
   const [loading, setLoading] = useState(false);
 
   async function loadState() {
-    const res = await fetch("/api/gaming?simId=admin-sim");
-    if (res.ok) {
-      const json = await res.json();
-      setState(json);
+    try {
+      const res = await fetch("/api/gaming?simId=admin-sim");
+      if (res.ok) {
+        const json = await res.json();
+        setState(json);
+      }
+    } catch (e) {
+      console.error(e);
     }
   }
 
@@ -52,136 +62,170 @@ export default function GamingPage() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-4 py-8">
-      <header className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">模拟器</h1>
-          <p className="mt-1 text-sm text-slate-400">使用虚拟资金模拟下注策略。</p>
-        </div>
-      </header>
+      <PageHeader
+        title="策略模拟器"
+        description="使用虚拟资金模拟下注策略。"
+      />
 
-        <section className="grid gap-4 md:grid-cols-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-            <div className="text-xs text-slate-500 uppercase tracking-wider">当前余额</div>
-            <div className="mt-2 text-2xl font-semibold text-sky-400">${formatNumber(state?.balance, 2)}</div>
-            <div className="mt-1 text-xs text-slate-500">初始: ${formatNumber(state?.start_balance, 2)}</div>
-          </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-            <div className="text-xs text-slate-500 uppercase tracking-wider">收益率 (ROI)</div>
-            <div className={`mt-2 text-2xl font-semibold ${state?.balance >= state?.start_balance ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {state?.start_balance ? (((state.balance - state.start_balance) / state.start_balance) * 100).toFixed(2) : '0.00'}%
-            </div>
-            <div className="mt-1 text-xs text-slate-500">利润: ${formatNumber(state?.balance - state?.start_balance, 2)}</div>
-          </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-            <div className="text-xs text-slate-500 uppercase tracking-wider">胜率 / 交易数</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-100">
-              {state?.stats?.trades ? ((state.stats.wins / state.stats.trades) * 100).toFixed(1) : '0.0'}%
-            </div>
-            <div className="mt-1 text-xs text-slate-500">{state?.stats?.wins} 胜 / {state?.stats?.losses} 负</div>
-          </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-            <div className="text-xs text-slate-500 uppercase tracking-wider">最大回撤</div>
-            <div className="mt-2 text-2xl font-semibold text-rose-400">{(state?.stats?.max_drawdown * 100).toFixed(1)}%</div>
-            <div className="mt-1 text-xs text-slate-500">跳过: {state?.stats?.skipped}</div>
-          </div>
-        </section>
+      <section className="grid gap-4 md:grid-cols-4">
+        <StatsCard 
+          title="当前余额" 
+          value={`$${formatNumber(state?.balance, 2)}`}
+          subValue={`初始: $${formatNumber(state?.start_balance, 2)}`}
+          valueClassName="text-sky-600 dark:text-sky-400"
+          variant="glass"
+        />
+        <StatsCard 
+          title="收益率 (ROI)" 
+          value={`${state?.start_balance ? (((state.balance - state.start_balance) / state.start_balance) * 100).toFixed(2) : '0.00'}%`}
+          subValue={`利润: $${formatNumber((state?.balance || 0) - (state?.start_balance || 0), 2)}`}
+          valueClassName={(state?.balance || 0) >= (state?.start_balance || 0) ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}
+          variant="glass"
+        />
+        <StatsCard 
+          title="胜率" 
+          value={`${state?.stats?.trades ? ((state.stats.wins / state.stats.trades) * 100).toFixed(1) : '0.0'}%`}
+          subValue={`${state?.stats?.wins || 0} 胜 / ${state?.stats?.losses || 0} 负`}
+          variant="glass"
+        />
+        <StatsCard 
+          title="最大回撤" 
+          value={`${(state?.stats?.max_drawdown * 100 || 0).toFixed(1)}%`}
+          subValue={`跳过: ${state?.stats?.skipped || 0}`}
+          valueClassName="text-rose-600 dark:text-rose-400"
+          variant="glass"
+        />
+      </section>
 
-        <section className="grid gap-4 md:grid-cols-3">
-          <div className="md:col-span-1 rounded-2xl border border-slate-800 bg-slate-950/80 p-6">
-            <h2 className="text-lg font-medium">控制面板</h2>
-            <div className="mt-4 space-y-4">
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">初始资金 (USDT)</label>
-                <input 
+      <section className="grid gap-4 md:grid-cols-3">
+        <div className="md:col-span-1 space-y-4">
+          <Card className="h-full" variant="glass">
+            <CardHeader>
+              <CardTitle>控制面板</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label>初始资金 (USDT)</Label>
+                <Input 
                   type="number" 
-                  className="w-full rounded bg-slate-900 border border-slate-700 px-3 py-2 text-sm" 
                   value={amount} 
                   onChange={e => setAmount(Number(e.target.value))} 
                   disabled={state?.running}
                 />
               </div>
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">模拟策略</label>
-                <select 
-                  className="w-full rounded bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+              <div className="space-y-2">
+                <Label>模拟策略</Label>
+                <Select
                   value={strategy}
-                  onChange={e => setStrategy(e.target.value)}
+                  onChange={(e) => setStrategy(e.target.value)}
                   disabled={state?.running}
                 >
-                  <option value="conservative">保守</option>
-                  <option value="balanced">均衡</option>
-                  <option value="aggressive">激进</option>
-                </select>
+                  <option value="conservative">保守 (Conservative)</option>
+                  <option value="balanced">均衡 (Balanced)</option>
+                  <option value="aggressive">激进 (Aggressive)</option>
+                </Select>
               </div>
               <div className="pt-2">
                 {!state?.running ? (
-                  <button 
+                  <Button 
                     onClick={() => handleAction('start')} 
-                    className="w-full py-2 rounded-full bg-emerald-500 text-slate-950 font-medium hover:bg-emerald-400 transition"
+                    className="w-full bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/20"
                     disabled={loading}
                   >
-                    启动模拟
-                  </button>
+                    {loading ? "启动中..." : "启动模拟"}
+                  </Button>
                 ) : (
-                  <button 
+                  <Button 
                     onClick={() => handleAction('stop')} 
-                    className="w-full py-2 rounded-full bg-rose-500 text-slate-50 font-medium hover:bg-rose-400 transition"
+                    className="w-full bg-rose-500 hover:bg-rose-600 text-white shadow-lg shadow-rose-500/20"
                     disabled={loading}
                   >
-                    停止模拟
-                  </button>
+                    {loading ? "停止中..." : "停止模拟"}
+                  </Button>
                 )}
               </div>
-              <div className="mt-4 p-3 rounded bg-slate-900/50 border border-slate-800">
-                <div className="text-xs text-slate-500">状态: <span className="text-slate-200">{state?.status}</span></div>
+              
+              <div className="mt-4 p-3 rounded-lg bg-slate-100 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-2">
+                  <span>状态</span>
+                  <Badge variant={state?.running ? "success" : "default"}>
+                    {state?.status || 'IDLE'}
+                  </Badge>
+                </div>
                 {state?.open_bet && (
-                  <div className="mt-2 text-xs text-slate-300">
-                    当前下注: <span className={state.open_bet.direction === 'UP' ? 'text-emerald-400' : 'text-rose-400'}>{state.open_bet.direction}</span> ({formatNumber(state.open_bet.amount, 2)})
+                  <div className="text-xs text-slate-600 dark:text-slate-300 border-t border-slate-200 dark:border-slate-800 pt-2 mt-2">
+                    <div className="flex justify-between items-center">
+                      <span>当前下注</span>
+                      <span className={state.open_bet.direction === 'UP' ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-rose-600 dark:text-rose-400 font-bold'}>
+                        {state.open_bet.direction}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center mt-1">
+                      <span>金额</span>
+                      <span className="font-mono">{formatNumber(state.open_bet.amount, 2)}</span>
+                    </div>
                   </div>
                 )}
               </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
+        </div>
 
-          <div className="md:col-span-2 rounded-2xl border border-slate-800 bg-slate-950/80 p-6">
-            <h2 className="text-lg font-medium">交易历史</h2>
-            <div className="mt-4 overflow-auto max-h-[400px]">
-              <table className="w-full text-xs text-left">
-                <thead className="text-slate-500 border-b border-slate-800">
-                  <tr>
-                    <th className="pb-2">回合</th>
-                    <th className="pb-2">方向</th>
-                    <th className="pb-2">结果</th>
-                    <th className="pb-2">金额</th>
-                    <th className="pb-2">盈亏</th>
-                    <th className="pb-2">余额</th>
-                    <th className="pb-2">时间</th>
-                  </tr>
-                </thead>
-                <tbody className="text-slate-300">
-                  {state?.history?.slice().reverse().map((h: any, i: number) => (
-                    <tr key={i} className="border-b border-slate-900/50">
-                      <td className="py-2 font-mono">{h.epoch}</td>
-                      <td className={`py-2 ${h.direction === 'UP' ? 'text-emerald-400' : 'text-rose-400'}`}>{h.direction}</td>
-                      <td className={`py-2 ${h.result === h.direction ? 'text-emerald-400' : 'text-rose-400'}`}>{h.result}</td>
-                      <td className="py-2">{formatNumber(h.bet_amount, 2)}</td>
-                      <td className={`py-2 ${h.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {h.profit >= 0 ? '+' : ''}{formatNumber(h.profit, 2)}
-                      </td>
-                      <td className="py-2 font-mono">{formatNumber(h.balance, 2)}</td>
-                      <td className="py-2 text-slate-500 text-[10px]">{formatTs(h.resolved_at)}</td>
-                    </tr>
-                  ))}
-                  {(!state?.history || state.history.length === 0) && (
-                    <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-600">暂无交易记录</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-      </main>
-    );
-  }
+        <div className="md:col-span-2">
+          <Card className="h-full flex flex-col" variant="glass">
+            <CardHeader>
+              <CardTitle>交易历史</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 min-h-0 overflow-hidden p-0">
+              <div className="overflow-auto max-h-[500px]">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-white dark:bg-slate-950 z-10">
+                    <TableRow>
+                      <TableHead className="w-[80px]">回合</TableHead>
+                      <TableHead className="w-[80px]">方向</TableHead>
+                      <TableHead className="w-[80px]">结果</TableHead>
+                      <TableHead>金额</TableHead>
+                      <TableHead>盈亏</TableHead>
+                      <TableHead>余额</TableHead>
+                      <TableHead className="text-right">时间</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {state?.history?.slice().reverse().map((h: any, i: number) => (
+                      <TableRow key={i}>
+                        <TableCell className="font-mono text-slate-500 dark:text-slate-400">{h.epoch}</TableCell>
+                        <TableCell>
+                          <span className={`font-medium ${h.direction === 'UP' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                            {h.direction}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className={`font-medium ${h.result === h.direction ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                            {h.result}
+                          </span>
+                        </TableCell>
+                        <TableCell className="font-mono">{formatNumber(h.bet_amount, 2)}</TableCell>
+                        <TableCell className={`font-mono font-medium ${h.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                          {h.profit >= 0 ? '+' : ''}{formatNumber(h.profit, 2)}
+                        </TableCell>
+                        <TableCell className="font-mono">{formatNumber(h.balance, 2)}</TableCell>
+                        <TableCell className="text-right text-slate-400 dark:text-slate-500 text-[10px]">{formatTs(h.resolved_at)}</TableCell>
+                      </TableRow>
+                    ))}
+                    {(!state?.history || state.history.length === 0) && (
+                      <TableRow>
+                        <TableCell colSpan={7} className="py-12 text-center text-slate-500 dark:text-slate-600">
+                          暂无交易记录
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+    </main>
+  );
+}

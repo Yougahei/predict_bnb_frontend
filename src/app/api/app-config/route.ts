@@ -91,8 +91,28 @@ const CONFIG_GROUPS = [
         placeholder: "0x...",
       },
       {
+        key: "STRATEGY",
+        label: "当前策略 (conservative/balanced/aggressive)",
+        placeholder: "balanced",
+      },
+      {
+        key: "BET_PERCENTAGE_CONSERVATIVE",
+        label: "保守策略仓位 (%)",
+        placeholder: "10",
+      },
+      {
+        key: "BET_PERCENTAGE_BALANCED",
+        label: "稳健策略仓位 (%)",
+        placeholder: "10",
+      },
+      {
+        key: "BET_PERCENTAGE_AGGRESSIVE",
+        label: "激进策略仓位 (%)",
+        placeholder: "10",
+      },
+      {
         key: "BET_PERCENTAGE",
-        label: "下注仓位 (%)",
+        label: "默认/兜底下注仓位 (%)",
         placeholder: "10",
       },
     ],

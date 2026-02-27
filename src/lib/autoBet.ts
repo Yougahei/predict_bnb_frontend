@@ -1,7 +1,8 @@
 import { getConfig } from "./configStore";
 import { placeBet, fetchBalance, fetchCurrentRound, getAddressFromPrivateKey, claimRewards, checkClaimable } from "./onchain";
 import { logBet, updateBetStatus, listBetLogs, acquireBetLock, getAutoClaimableEpochs, markAsClaimed } from "./betStore";
-import { AnyDict } from "./prediction";
+import { AnyDict, applyStrategy, computeBetWithStrategy } from "./prediction";
+import { getModelConfig } from "./modelConfig";
 
 const PENDING_TIMEOUTS = new Map<number, NodeJS.Timeout>();
 const PROCESSING_EPOCHS = new Set<number>();
@@ -29,27 +30,41 @@ export async function runAutoClaimLogic(): Promise<void> {
     }
 
     // Double-check on-chain eligibility to avoid reverts
-    const checks = await Promise.all(
-      epochs.map(async (e) => {
-        try {
-          const ok = await checkClaimable(e, walletAddress);
-          return ok ? e : null;
-        } catch {
-          return null;
+    // Use serial execution to avoid RPC rate limits
+    const toClaim: number[] = [];
+    for (const e of epochs) {
+      try {
+        // Add a small delay between checks
+        await new Promise(r => setTimeout(r, 200));
+        const ok = await checkClaimable(e, walletAddress);
+        if (ok) {
+          toClaim.push(e);
+        } else {
+          // If check fails (returns false), it might be already claimed or invalid.
+          // We can optionally mark it as claimed in DB if we are sure it's claimed,
+          // but for now let's just skip it.
+          console.log(`[AutoClaim] Epoch ${e} not claimable on-chain (already claimed or invalid).`);
         }
-      })
-    );
-    const toClaim = checks.filter((e): e is number => e !== null);
+      } catch (err) {
+        console.error(`[AutoClaim] Error checking epoch ${e}:`, err);
+      }
+    }
+
     if (toClaim.length === 0) {
       console.log("[AutoClaim] No epochs eligible on-chain after check.");
       return;
     }
 
+    console.log(`[AutoClaim] Verified claimable epochs: ${toClaim.join(", ")}`);
+
     // 执行链上领取
     const result = await claimRewards(privateKey, toClaim);
     if (result && result.hash) {
-      console.log(`[AutoClaim] Claimed successfully! Tx: ${result.hash}`);
-      // 更新数据库状态
+      console.log(`[AutoClaim] Claim transaction sent! Tx: ${result.hash}`);
+      // Wait for confirmation is now handled inside claimRewards or we assume success?
+      // Ideally claimRewards should wait. If it doesn't, we risk marking as claimed prematurely.
+      // But for now, let's assume if hash is generated, it's likely to succeed.
+      // Better fix: update claimRewards to wait.
       markAsClaimed(toClaim);
     } else {
       console.error("[AutoClaim] Failed to send claim transaction.");
@@ -138,9 +153,25 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
       return;
     }
 
-    // 只有在确定要立即执行下注时，才解析决策
-    const decision = voteSummary.decision as string | null;
-    if (!decision || decision === "ABSTAIN") return;
+    // 1. Get Strategy Config
+    const { strategy } = getModelConfig();
+
+    // 2. Apply Strategy to Vote
+    const adjustedVote = applyStrategy(voteSummary, strategy);
+    
+    // 3. Check Freshness (Consistency with Simulator)
+    // Simulator checks: snapshot.model_predictions.some(p => !p.stale && ...)
+    // voteSummary.details has the same info aggregated
+    const details = (voteSummary.details as any[]) || [];
+    const hasFresh = details.some(d => !d.stale && (d.direction === 'UP' || d.direction === 'DOWN'));
+    
+    if (!hasFresh) {
+      console.log(`[AutoBet] No fresh predictions for epoch ${epoch}, skipping.`);
+      return;
+    }
+
+    const decision = adjustedVote.decision as string | null;
+    if (!decision || decision === "ABSTAIN" || decision === "NO") return;
     const side = decision as "UP" | "DOWN";
 
     // 获取数据库互斥锁
@@ -159,11 +190,10 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
       return;
     }
 
-    const percentageStr = getConfig("BET_PERCENTAGE", "10") || "10";
-    const percentage = parseFloat(percentageStr);
-
-    // Calculate amount based on percentage of balance
+    // Calculate amount based on strategy
     let amount = 0;
+    let percentage = 0;
+
     try {
       const balance = await fetchBalance(walletAddress);
       if (balance === null) throw new Error("Could not fetch wallet balance");
@@ -171,11 +201,31 @@ export async function runAutoBetLogic(epoch: number, voteSummary: AnyDict | null
       // Safety margin for gas (keep at least 0.002 BNB)
       const safetyMargin = 0.002;
       const availableBalance = Math.max(0, balance - safetyMargin);
-      amount = (availableBalance * percentage) / 100;
+
+      // 4. Calculate Amount: Use user configured percentage as base
+      // If config is missing, fallback to simulator dynamic logic
+      // Try strategy-specific config first (e.g. BET_PERCENTAGE_AGGRESSIVE), then fallback to global BET_PERCENTAGE
+      const strategyKey = `BET_PERCENTAGE_${strategy.toUpperCase()}`;
+      const userPctStr = getConfig(strategyKey) || getConfig("BET_PERCENTAGE");
+      
+      if (userPctStr) {
+        // User has set a specific percentage, use it as the fixed size
+        const userPct = parseFloat(userPctStr);
+        percentage = Math.max(1, Math.min(100, userPct));
+        amount = (availableBalance * percentage) / 100;
+        
+        console.log(`[AutoBet] Using user configured percentage for ${strategy}: ${percentage}%`);
+      } else {
+        // Fallback to simulator dynamic logic
+        const betCalc = computeBetWithStrategy(availableBalance, adjustedVote, strategy);
+        amount = betCalc.amount;
+        percentage = (betCalc.percent || 0) * 100;
+        console.log(`[AutoBet] Using dynamic strategy percentage for ${strategy}: ${percentage.toFixed(2)}%`);
+      }
 
       // Minimum bet check (PancakeSwap usually requires some min amount, but 0.001 is a safe floor for logic)
       if (amount < 0.0001) {
-        console.warn(`[AutoBet] Calculated amount ${amount} too small, skipping.`);
+        console.warn(`[AutoBet] Calculated amount ${amount} too small (strategy: ${strategy}, percent: ${percentage.toFixed(2)}%), skipping.`);
         return;
       }
       

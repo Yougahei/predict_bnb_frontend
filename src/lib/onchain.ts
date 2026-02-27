@@ -500,7 +500,22 @@ export async function claimRewards(
       wallet
     );
 
-    const tx = await contract.claim(epochs.map((e) => BigInt(e)));
+    // Get nonce manually to prevent stuck transactions
+    const nonce = await prov.getTransactionCount(wallet.address, "latest");
+    
+    // Use a fixed high gas limit per claim (e.g. 200k per epoch)
+    // 300k base + 100k per epoch to be safe
+    const gasLimit = BigInt(300000 + epochs.length * 100000);
+
+    const tx = await contract.claim(epochs.map((e) => BigInt(e)), { 
+      nonce,
+      gasLimit 
+    });
+    
+    console.log(`[OnChain] Claim tx sent: ${tx.hash}, waiting for confirmation...`);
+    await tx.wait(1); // Wait for 1 confirmation
+    console.log(`[OnChain] Claim tx confirmed: ${tx.hash}`);
+
     return { hash: tx.hash };
   } catch (err) {
     console.error("claimRewards error", err);
