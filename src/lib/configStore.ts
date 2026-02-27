@@ -3,7 +3,9 @@ import path from "node:path";
 
 const DB_PATH =
   process.env.CONFIG_DB ||
-  path.join(process.cwd(), "predict_bnb_data", "config.db");
+  (process.env.VERCEL
+    ? path.join("/tmp", "predict_bnb_data", "config.db")
+    : path.join(process.cwd(), "predict_bnb_data", "config.db"));
 
 const TABLES = [
   `CREATE TABLE IF NOT EXISTS app_config (
